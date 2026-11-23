@@ -1,0 +1,14 @@
+# Dependencies & build caches
+node_modules/
+recorder-macos/.build/
+npm-debug.log*
+
+# Generated plugin artifacts (rebuilt locally via `npm run build` / `npm run install:plugin`)
+plugin/bin/
+plugin/ui/app.html
+
+# OS & temporary files
+.DS_Store
+*.tmp
+.env
+.env.*

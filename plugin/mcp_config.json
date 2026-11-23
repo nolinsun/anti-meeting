@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "recorder": {
+      "command": "node",
+      "args": [
+        "${PLUGIN_ROOT}/bin/meeting-mcp-server.mjs",
+        "--data-dir=${PLUGIN_DATA}",
+        "--plugin-root=${PLUGIN_ROOT}"
+      ]
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "name": "anti-meeting",
+  "version": "0.3.1",
+  "description": "macOS-only local meeting recorder and Markdown notes plugin for Antigravity",
+  "license": "MIT",
+  "os": [
+    "darwin"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nolinsun/anti-meeting.git"
+  },
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build:server": "esbuild mcp-server/src/index.ts --bundle --platform=node --target=node22 --format=esm --outfile=plugin/bin/meeting-mcp-server.mjs --banner:js=\"import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);\"",
+    "build:ui": "node ui/scripts/build-ui.mjs",
+    "build:native": "bash mcp-server/native/build-openat.sh",
+    "build:swift": "bash recorder-macos/scripts/bundle-app.sh",
+    "install:plugin": "bash scripts/install-plugin.sh",
+    "build": "npm run build:ui && npm run build:native && npm run build:server && npm run build:swift"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/ext-apps": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.24.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  }
+}
