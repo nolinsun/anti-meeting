@@ -1,5 +1,7 @@
 # anti-meeting
 
+**简体中文** | [English](README.en.md)
+
 > A **macOS-only** local meeting recorder, dual-track speaker timeline generator, and structured Markdown meeting notes plugin (MCP App + Skill + Native Swift Recorder) for **Google Antigravity**.
 
 > [!IMPORTANT]
