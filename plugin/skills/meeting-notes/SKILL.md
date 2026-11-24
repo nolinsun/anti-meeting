@@ -1,11 +1,11 @@
 ---
 name: meeting-notes
-description: Transcribe locally recorded anti-meeting audio chunks (sequentially for <= 4 chunks, or grouped 2-3 chunks via parallel read-only research subagents for > 4 missing chunks) via read_file supporting dual-track (`dual`) with speaker timelines and mic-only (`mic`), correct terms using workspace context, and persist structured meeting notes. Activate when the user asks to transcribe, summarize, or generate notes for a recorded meeting.
+description: Transcribe locally recorded Meeting Notes audio chunks (sequentially for <= 4 chunks, or grouped 2-3 chunks via parallel read-only research subagents for > 4 missing chunks) via read_file supporting dual-track (`dual`) with speaker timelines and mic-only (`mic`), correct terms using workspace context, and persist structured meeting notes. Activate when the user asks to transcribe, summarize, or generate notes for a recorded meeting.
 ---
 
 # Meeting Transcription & Notes Workflow
 
-Follow this sequential, resumable workflow whenever asked to transcribe or summarize a meeting recorded by **anti-meeting**:
+Follow this sequential, resumable workflow whenever asked to transcribe or summarize a meeting recorded by **Meeting Notes**:
 
 ## 1. Inspect Meeting & Resume State
 

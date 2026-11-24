@@ -95,7 +95,7 @@ final class RecorderCoordinator: @unchecked Sendable {
     let dataDir: URL
     private let defaultChunkDurationSec: Double
     private let lock = NSLock()
-    private let manifestIOQueue = DispatchQueue(label: "com.antigravity.meeting.manifestio")
+    private let manifestIOQueue = DispatchQueue(label: "io.github.nolinsun.meeting.manifestio")
 
     private var state: String = "idle" // idle | starting | recording | finalizing | error
     private var isShuttingDown = false

@@ -23,11 +23,11 @@ const jsCode = result.outputFiles[0]?.text ?? "";
 const cssCode = fs.readFileSync(cssPath, "utf8");
 
 const html = `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>anti-meeting</title>
+  <title>Meeting Notes</title>
   <style>
 ${cssCode}
   </style>

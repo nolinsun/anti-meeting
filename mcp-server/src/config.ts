@@ -8,7 +8,13 @@ export interface ServerConfig {
   dataDir: string;
   meetingsDir: string;
   pluginRoot: string;
-  appBundlePath: string;
+  recorderSourcesDir: string;
+  nativeSourcesDir: string;
+  dataBinDir: string;
+  dataAppBundlePath: string;
+  pluginAppBundlePath: string;
+  readonly appBundlePath: string;
+  resolveAppBundlePath(): string;
   socketPath: string;
   uiHtmlPath: string;
 }
@@ -34,7 +40,7 @@ export function resolveSocketPath(dataDir: string, explicitSocket?: string): str
     return candidate;
   }
   const uid = typeof process.getuid === "function" ? process.getuid() : 0;
-  const privateDir = path.join("/tmp", `agy-meeting-${uid}`);
+  const privateDir = path.join("/tmp", `meeting-notes-${uid}`);
   fs.mkdirSync(privateDir, { recursive: true, mode: 0o700 });
   try {
     fs.chmodSync(privateDir, 0o700);
@@ -45,6 +51,15 @@ export function resolveSocketPath(dataDir: string, explicitSocket?: string): str
   return path.join(privateDir, `s-${hash}.sock`);
 }
 
+function hasExecutable(appDir: string): boolean {
+  try {
+    const exePath = path.join(appDir, "Contents", "MacOS", "MeetingRecorder");
+    return fs.statSync(exePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
 export function loadConfig(argv: string[] = process.argv.slice(2)): ServerConfig {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const defaultPluginRoot = path.resolve(here, "..");
@@ -52,7 +67,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): ServerConfig
     os.homedir(),
     "Library",
     "Application Support",
-    "AntiMeeting",
+    "MeetingNotes",
   );
 
   const rawDataDir =
@@ -70,11 +85,49 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): ServerConfig
   const pluginRoot = path.resolve(rawPluginRoot);
   const explicitSocket = parseArg(argv, "--socket");
 
+  const bundledRecorderSources = path.join(pluginRoot, "sources", "recorder-macos");
+  const devRecorderSources = path.resolve(pluginRoot, "..", "recorder-macos");
+  const recorderSourcesDir = fs.existsSync(path.join(bundledRecorderSources, "Package.swift"))
+    ? bundledRecorderSources
+    : fs.existsSync(path.join(devRecorderSources, "Package.swift"))
+      ? devRecorderSources
+      : bundledRecorderSources;
+
+  const bundledNativeSources = path.join(pluginRoot, "sources", "native");
+  const devNativeSources = path.resolve(pluginRoot, "..", "mcp-server", "native");
+  const nativeSourcesDir = fs.existsSync(path.join(bundledNativeSources, "safe_openat.c"))
+    ? bundledNativeSources
+    : fs.existsSync(path.join(devNativeSources, "safe_openat.c"))
+      ? devNativeSources
+      : bundledNativeSources;
+
+  const dataBinDir = path.join(dataDir, "bin");
+  const dataAppBundlePath = path.join(dataBinDir, "MeetingRecorder.app");
+  const pluginAppBundlePath = path.join(pluginRoot, "bin", "MeetingRecorder.app");
+
+  const resolveAppBundlePath = (): string => {
+    if (hasExecutable(dataAppBundlePath)) {
+      return dataAppBundlePath;
+    }
+    if (hasExecutable(pluginAppBundlePath)) {
+      return pluginAppBundlePath;
+    }
+    return dataAppBundlePath;
+  };
+
   return {
     dataDir,
     meetingsDir: path.join(dataDir, "meetings"),
     pluginRoot,
-    appBundlePath: path.join(pluginRoot, "bin", "MeetingRecorder.app"),
+    recorderSourcesDir,
+    nativeSourcesDir,
+    dataBinDir,
+    dataAppBundlePath,
+    pluginAppBundlePath,
+    get appBundlePath() {
+      return resolveAppBundlePath();
+    },
+    resolveAppBundlePath,
     socketPath: resolveSocketPath(dataDir, explicitSocket),
     uiHtmlPath:
       process.env.MEETING_APP_HTML || path.join(pluginRoot, "ui", "app.html"),

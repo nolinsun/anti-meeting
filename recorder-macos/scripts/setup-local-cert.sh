@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CERT_NAME="Antigravity Meeting Local"
+CERT_NAME="Local Meeting Recorder"
 
 if security find-identity -v -p codesigning 2>/dev/null | grep -q "\"$CERT_NAME\""; then
   echo "Code signing certificate '$CERT_NAME' already exists."
@@ -38,10 +38,10 @@ openssl pkcs12 -export \
   -inkey "$TMP_DIR/key.pem" \
   -in "$TMP_DIR/cert.pem" \
   -out "$TMP_DIR/cert.p12" \
-  -passout pass:antigravity-meeting
+  -passout pass:local-meeting-recorder
 
 LOGIN_KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
-security import "$TMP_DIR/cert.p12" -k "$LOGIN_KEYCHAIN" -P antigravity-meeting -T /usr/bin/codesign
+security import "$TMP_DIR/cert.p12" -k "$LOGIN_KEYCHAIN" -P local-meeting-recorder -T /usr/bin/codesign
 security add-trusted-cert -r trustRoot -p codeSign -k "$LOGIN_KEYCHAIN" "$TMP_DIR/cert.pem"
 
 echo "Installed and trusted '$CERT_NAME' in $LOGIN_KEYCHAIN."

@@ -334,6 +334,9 @@ export class RecorderDaemonClient {
   }
 
   async probeStatus(): Promise<DaemonProbeResult> {
+    if (process.platform !== "darwin") {
+      return { kind: "not_running" };
+    }
     try {
       this.assertDataDirSafe(false);
     } catch (err) {
@@ -378,6 +381,9 @@ export class RecorderDaemonClient {
   }
 
   async tryGetPermissionsIfRunning(): Promise<PermissionSnapshot | null> {
+    if (process.platform !== "darwin") {
+      return null;
+    }
     try {
       this.assertDataDirSafe(false);
     } catch {
@@ -407,7 +413,7 @@ export class RecorderDaemonClient {
   }
 
   private currentBundleBinaryId(): string | null {
-    const exePath = path.join(this.config.appBundlePath, "Contents", "MacOS", "MeetingRecorder");
+    const exePath = path.join(this.config.resolveAppBundlePath(), "Contents", "MacOS", "MeetingRecorder");
     try {
       const st = fs.statSync(exePath);
       if (!st.isFile()) return null;
@@ -422,7 +428,7 @@ export class RecorderDaemonClient {
     if (!expected) {
       return false;
     }
-    return health.appVersion !== "0.3.0" || health.binaryId !== expected;
+    return health.appVersion !== "0.4.0" || health.binaryId !== expected;
   }
 
   private async quitIfIdleAndWait(): Promise<boolean> {
@@ -458,6 +464,9 @@ export class RecorderDaemonClient {
   }
 
   private async doEnsureRunning(): Promise<HealthResponse> {
+    if (process.platform !== "darwin") {
+      throw new Error("Meeting Notes audio recording is currently supported on macOS only.");
+    }
     this.assertDataDirSafe(false);
     let retiredStaleDaemon = false;
     try {
@@ -479,9 +488,10 @@ export class RecorderDaemonClient {
       }
     }
 
-    if (!fs.existsSync(this.config.appBundlePath)) {
+    const appBundlePath = this.config.resolveAppBundlePath();
+    if (!fs.existsSync(appBundlePath)) {
       throw new Error(
-        `MeetingRecorder.app 未找到: ${this.config.appBundlePath}。请先运行构建与安装脚本。`,
+        `MeetingRecorder.app is not initialized yet (${appBundlePath}). Click "Initialize Local Recorder" in the Meeting Notes panel first.`,
       );
     }
 
@@ -496,7 +506,7 @@ export class RecorderDaemonClient {
         "-n",
         "-g",
         "-a",
-        this.config.appBundlePath,
+        appBundlePath,
         "--args",
         "--data-dir",
         this.config.dataDir,

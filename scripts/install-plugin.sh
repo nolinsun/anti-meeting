@@ -5,12 +5,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SRC_PLUGIN="$ROOT_DIR/plugin"
 SKIP_BUILD=false
-DEST_PLUGIN="$HOME/.gemini/config/plugins/anti-meeting"
+OPTION_B=false
+DEST_PLUGIN="$HOME/.gemini/config/plugins/meeting-notes"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build)
       SKIP_BUILD=true
+      shift
+      ;;
+    --option-b)
+      OPTION_B=true
       shift
       ;;
     --dest)
@@ -30,7 +35,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     *)
-      echo "Error: unknown argument '$1'. Allowed flags: --skip-build, --dest <path>" >&2
+      echo "Error: unknown argument '$1'. Allowed flags: --skip-build, --option-b, --dest <path>" >&2
       exit 2
       ;;
   esac
@@ -50,8 +55,8 @@ if [[ -z "$DEST_PLUGIN" || "$DEST_PLUGIN" == "/" || "$DEST_PARENT_RAW" == "/" ]]
   exit 2
 fi
 
-if [[ "$DEST_BASE" != "anti-meeting" ]]; then
-  echo "Error: destination directory basename must be 'anti-meeting', got '$DEST_BASE'" >&2
+if [[ "$DEST_BASE" != "meeting-notes" && "$DEST_BASE" != "anti-meeting" ]]; then
+  echo "Error: destination directory basename must be 'meeting-notes' or 'anti-meeting', got '$DEST_BASE'" >&2
   exit 2
 fi
 
@@ -70,20 +75,25 @@ if [[ -e "$DEST_REAL" ]]; then
     exit 2
   fi
   if [[ -n "$(ls -A "$DEST_REAL")" && ! -f "$DEST_REAL/plugin.json" ]]; then
-    echo "Error: non-empty destination '$DEST_REAL' does not look like an existing anti-meeting plugin (missing plugin.json)" >&2
+    echo "Error: non-empty destination '$DEST_REAL' does not look like an existing plugin (missing plugin.json)" >&2
     exit 2
   fi
 fi
 
 if [[ "$SKIP_BUILD" != "true" ]]; then
-  echo "[install-plugin] Building UI, MCP server, and MeetingRecorder.app..."
-  npm --prefix "$ROOT_DIR" run build
+  if [[ "$OPTION_B" == "true" ]]; then
+    echo "[install-plugin] Building Option B plugin bundle (UI, MCP server, bundled sources)..."
+    npm --prefix "$ROOT_DIR" run build:plugin
+  else
+    echo "[install-plugin] Building UI, MCP server, native addon, and MeetingRecorder.app..."
+    npm --prefix "$ROOT_DIR" run build
+  fi
 fi
 
 if [[ "$(basename "$DEST_PARENT_REAL")" == "plugins" && -w "$(dirname "$DEST_PARENT_REAL")" ]]; then
-  STAGING_DIR="$(dirname "$DEST_PARENT_REAL")/.anti-meeting.staging.$$"
+  STAGING_DIR="$(dirname "$DEST_PARENT_REAL")/.${DEST_BASE}.staging.$$"
 else
-  STAGING_DIR="$DEST_PARENT_REAL/.anti-meeting.staging.$$"
+  STAGING_DIR="$DEST_PARENT_REAL/.${DEST_BASE}.staging.$$"
 fi
 
 cleanup_on_error() {
@@ -98,20 +108,31 @@ rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR"
 ditto "$SRC_REAL" "$STAGING_DIR"
 
-for required in \
-  "plugin.json" \
-  "mcp_config.json" \
-  "bin/meeting-mcp-server.mjs" \
-  "bin/safe_openat.node" \
-  "bin/MeetingRecorder.app/Contents/MacOS/MeetingRecorder" \
-  "ui/app.html" \
+if [[ "$OPTION_B" == "true" ]]; then
+  rm -rf "$STAGING_DIR/bin"
+fi
+
+REQUIRED_FILES=(
+  "plugin.json"
+  "mcp_config.json"
+  "scripts/meeting-mcp-server.mjs"
+  "ui/app.html"
   "skills/meeting-notes/SKILL.md"
-do
+  "sources/recorder-macos/Package.swift"
+)
+
+if [[ "$OPTION_B" != "true" ]] && [[ "$SKIP_BUILD" != "true" || -e "$STAGING_DIR/bin/MeetingRecorder.app" ]]; then
+  REQUIRED_FILES+=("bin/MeetingRecorder.app/Contents/MacOS/MeetingRecorder")
+fi
+
+for required in "${REQUIRED_FILES[@]}"; do
   if [[ ! -e "$STAGING_DIR/$required" ]]; then
     echo "Error: staged plugin missing required file '$required'" >&2
     exit 1
   fi
 done
+
+chmod +x "$STAGING_DIR/scripts/meeting-mcp-server.mjs"
 
 echo "[install-plugin] Installing plugin atomically to $DEST_REAL..."
 python3 - "$STAGING_DIR" "$DEST_REAL" <<'PYEOF'
@@ -161,10 +182,15 @@ rm -rf "$STAGING_DIR"
 echo "[install-plugin] Installed files:"
 find "$DEST_REAL" -maxdepth 3 | sort
 
-DEFAULT_PROD_DEST="$(abs_path "$HOME/.gemini/config/plugins/anti-meeting")"
-PROD_SOCK="$HOME/.gemini/antigravity/plugin_data/anti-meeting/run/recorder.sock"
-if [[ "$DEST_REAL" == "$DEFAULT_PROD_DEST" && -S "$PROD_SOCK" ]]; then
-  python3 - "$PROD_SOCK" <<'PYEOF'
+EXPECTED_USER_DEST="$(abs_path "$HOME/.gemini/config/plugins/$DEST_BASE")"
+if [[ "$DEST_REAL" == "$EXPECTED_USER_DEST" ]]; then
+  SOCK_CANDIDATES=("$HOME/.gemini/antigravity/plugin_data/$DEST_BASE/run/recorder.sock")
+  if [[ "$DEST_BASE" != "meeting-notes" ]]; then
+    SOCK_CANDIDATES+=("$HOME/.gemini/antigravity/plugin_data/meeting-notes/run/recorder.sock")
+  fi
+  for PROD_SOCK in "${SOCK_CANDIDATES[@]}"; do
+    if [[ -S "$PROD_SOCK" ]]; then
+      python3 - "$PROD_SOCK" <<'PYEOF'
 import json
 import socket
 import sys
@@ -197,17 +223,20 @@ try:
 except Exception:
     pass
 PYEOF
-fi
+    fi
+  done
 
-if [[ "$DEST_REAL" == "$DEFAULT_PROD_DEST" && -n "${ANTIGRAVITY_CSRF_TOKEN:-}" ]]; then
-  LS_ADDR="${ANTIGRAVITY_LS_ADDRESS:-localhost:5387}"
-  if curl -sf --max-time 5 \
-    -H "Content-Type: application/json" \
-    -H "x-codeium-csrf-token: ${ANTIGRAVITY_CSRF_TOKEN}" \
-    -d '{"serverName":"anti-meeting_recorder"}' \
-    "http://${LS_ADDR}/exa.language_server_pb.LanguageServerService/RefreshMcpServers" >/dev/null 2>&1; then
-    echo "[install-plugin] Refreshed live MCP server anti-meeting_recorder via LanguageServer."
-  else
-    echo "[install-plugin] Warning: failed to refresh anti-meeting_recorder via LanguageServer; reload MCP server in settings if already running." >&2
+  if [[ -n "${ANTIGRAVITY_CSRF_TOKEN:-}" ]]; then
+    LS_ADDR="${ANTIGRAVITY_LS_ADDRESS:-localhost:5387}"
+    MCP_SERVER_NAME="${DEST_BASE}_recorder"
+    if curl -sf --max-time 5 \
+      -H "Content-Type: application/json" \
+      -H "x-codeium-csrf-token: ${ANTIGRAVITY_CSRF_TOKEN}" \
+      -d "{\"serverName\":\"${MCP_SERVER_NAME}\"}" \
+      "http://${LS_ADDR}/exa.language_server_pb.LanguageServerService/RefreshMcpServers" >/dev/null 2>&1; then
+      echo "[install-plugin] Refreshed live MCP server ${MCP_SERVER_NAME} via LanguageServer."
+    else
+      echo "[install-plugin] Warning: failed to refresh ${MCP_SERVER_NAME} via LanguageServer; reload MCP server in settings if already running." >&2
+    fi
   fi
 fi

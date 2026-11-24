@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -14,6 +15,8 @@ import {
   type PermissionSnapshot,
   type RecorderStateSnapshot,
 } from "./daemon.js";
+import { configureNativeSearchDirs } from "./native.js";
+import { buildLocalRuntime, getRuntimeStatus } from "./runtimeSetup.js";
 import { MeetingStore } from "./store.js";
 
 const APP_URI = "ui://meeting/app.html";
@@ -101,6 +104,7 @@ async function assertMeetingSafeToMutate(
 
 async function main() {
   const config = loadConfig();
+  configureNativeSearchDirs([config.dataBinDir, path.join(config.pluginRoot, "bin")]);
   const store = new MeetingStore(config.meetingsDir, config.dataDir);
   try {
     store.ensureRoot();
@@ -111,16 +115,16 @@ async function main() {
   let lastRetentionSweepAt = 0;
 
   const server = new McpServer({
-    name: "anti-meeting",
-    version: "0.3.1",
+    name: "meeting-notes",
+    version: "0.4.0",
   });
 
   registerAppResource(
     server,
-    "anti-meeting UI",
+    "Meeting Notes UI",
     APP_URI,
     {
-      description: "anti-meeting recorder side pane & history dashboard",
+      description: "Meeting Notes recorder side pane & history dashboard",
       _meta: {
         ui: {
           prefersBorder: false,
@@ -152,14 +156,14 @@ async function main() {
     },
   );
 
-  // Entrypoint tool for the aux_pane ("anti-meeting").
+  // Entrypoint tool for aux_pane & global views ("Meeting Notes").
   registerAppTool(
     server,
     "meeting_open_panel",
     {
-      title: "打开 anti-meeting 侧边栏",
+      title: "Open Meeting Notes",
       description:
-        "Open the anti-meeting side pane (live recorder or meeting history). All arguments are optional.",
+        "Open the Meeting Notes side pane or full-page view (live macOS recorder and meeting history). All arguments are optional.",
       inputSchema: {
         view: z.enum(["live", "history"]).optional(),
         meetingId: z.string().optional(),
@@ -170,7 +174,8 @@ async function main() {
         },
         "com.google.antigravity/ui": {
           entrypoints: [
-            { type: "aux_pane", title: "anti-meeting" },
+            { type: "aux_pane", title: "Meeting Notes" },
+            { type: "global", title: "Meeting Notes" },
           ],
         },
       },
@@ -178,17 +183,21 @@ async function main() {
     async (args) => {
       try {
         store.ensureRoot();
+        const runtimeStatus = await getRuntimeStatus(config);
+        const settings = store.getSettings();
         const probe = await daemon.probeStatus();
         const list = store.listMeetings(30, 0);
         return jsonResult(
           {
             requestedView: args.view ?? null,
             requestedMeetingId: args.meetingId ?? null,
+            runtimeStatus,
+            settings,
             snapshot: probe.kind === "running" ? probe.snapshot : null,
             recentMeetings: list.items,
             totalMeetings: list.total,
           },
-          `anti-meeting 侧边栏已就绪（历史会议 ${list.total} 场）。`,
+          `Meeting Notes panel ready (${list.total} meetings).`,
         );
       } catch (err) {
         return errorResult(err);
@@ -201,9 +210,9 @@ async function main() {
   server.registerTool(
     "meeting_start",
     {
-      title: "开始会议录制",
+      title: "Start Meeting Recording",
       description:
-        "Start a local meeting recording session: mode 'dual' (dual-track: global macOS system audio + microphone for Zoom, Feishu, Tencent Meeting, Patreon, browsers, etc.) or 'mic' (mic-only: microphone-only).",
+        "Start a local meeting recording session (macOS only): mode 'dual' (dual-track: global macOS system audio + microphone for Zoom, Feishu, Tencent Meeting, Google Meet, Teams, browsers, etc.) or 'mic' (mic-only).",
       inputSchema: {
         mode: z
           .enum(["mic", "dual"])
@@ -469,12 +478,13 @@ async function main() {
     async (args) => {
       try {
         store.ensureRoot();
+        const runtimeStatus = await getRuntimeStatus(config);
         let daemonRunning = false;
         let daemonError: string | null = null;
         let snapshot: RecorderStateSnapshot | null = null;
         let permissions: PermissionSnapshot = { mic: "not_determined", systemAudio: "unverified" };
 
-        if (args.autoLaunch === true) {
+        if (args.autoLaunch === true && runtimeStatus.supported && runtimeStatus.appReady) {
           try {
             snapshot = await daemon.getStatus();
             permissions = await daemon.getPermissions();
@@ -482,7 +492,7 @@ async function main() {
           } catch (err) {
             daemonError = err instanceof Error ? err.message : String(err);
           }
-        } else {
+        } else if (runtimeStatus.supported) {
           const probe = await daemon.probeStatus();
           if (probe.kind === "running") {
             daemonRunning = true;
@@ -531,6 +541,7 @@ async function main() {
           trackedIds.length > 0 ? store.getSummariesByIds(trackedIds) : {};
         return jsonResult(
           {
+            runtimeStatus,
             daemonRunning,
             daemonError,
             snapshot,
@@ -542,7 +553,7 @@ async function main() {
             activeNotesJobIds,
             trackedSummaries,
           },
-          `daemonRunning=${daemonRunning}, meetings=${list.total}`,
+          `daemonRunning=${daemonRunning}, appReady=${runtimeStatus.appReady}, meetings=${list.total}`,
         );
       } catch (err) {
         return errorResult(err);
@@ -702,10 +713,12 @@ async function main() {
   server.registerTool(
     "app_set_settings",
     {
-      title: "设置原音频留存策略",
-      description: "UI-only helper to configure audio retention policy and optionally sweep completed meetings.",
+      title: "Update Plugin Settings",
+      description:
+        "UI-only helper to configure audio retention policy or UI language and optionally sweep completed meetings.",
       inputSchema: {
-        audioRetentionPolicy: z.enum(["manual", "after_notes", "days_7"]),
+        audioRetentionPolicy: z.enum(["manual", "after_notes", "days_7"]).optional(),
+        uiLanguage: z.enum(["en", "zh"]).optional(),
         applyNow: z.boolean().optional(),
       },
       _meta: {
@@ -715,15 +728,19 @@ async function main() {
     async (args) => {
       try {
         const settings = store.setSettings({
-          audioRetentionPolicy: args.audioRetentionPolicy,
+          ...(args.audioRetentionPolicy !== undefined
+            ? { audioRetentionPolicy: args.audioRetentionPolicy }
+            : {}),
+          ...(args.uiLanguage !== undefined ? { uiLanguage: args.uiLanguage } : {}),
         });
         let sweep: { cleanedMeetingIds: string[]; freedBytes: number } = {
           cleanedMeetingIds: [],
           freedBytes: 0,
         };
         if (
-          settings.audioRetentionPolicy === "days_7" ||
-          (settings.audioRetentionPolicy === "after_notes" && args.applyNow === true)
+          (args.audioRetentionPolicy !== undefined || args.applyNow === true) &&
+          (settings.audioRetentionPolicy === "days_7" ||
+            (settings.audioRetentionPolicy === "after_notes" && args.applyNow === true))
         ) {
           const probe = await daemon.probeStatus();
           if (probe.kind !== "unknown") {
@@ -746,7 +763,47 @@ async function main() {
             cleanedMeetingIds: sweep.cleanedMeetingIds,
             freedBytes: sweep.freedBytes,
           },
-          `policy=${settings.audioRetentionPolicy}, cleaned=${sweep.cleanedMeetingIds.length}`,
+          `policy=${settings.audioRetentionPolicy}, lang=${settings.uiLanguage}, cleaned=${sweep.cleanedMeetingIds.length}`,
+        );
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "app_setup_runtime",
+    {
+      title: "Initialize Local Recorder",
+      description: "UI-only helper to compile and sign MeetingRecorder.app locally on macOS.",
+      inputSchema: {},
+      _meta: {
+        ui: { visibility: ["app"] },
+      },
+    },
+    async () => {
+      try {
+        const runtimeStatus = await buildLocalRuntime(config);
+        let daemonRunning = false;
+        let daemonError: string | null = null;
+        let snapshot: RecorderStateSnapshot | null = null;
+        let permissions: PermissionSnapshot = { mic: "not_determined", systemAudio: "unverified" };
+        try {
+          snapshot = await daemon.getStatus();
+          permissions = await daemon.getPermissions();
+          daemonRunning = true;
+        } catch (err) {
+          daemonError = err instanceof Error ? err.message : String(err);
+        }
+        return jsonResult(
+          {
+            runtimeStatus,
+            daemonRunning,
+            daemonError,
+            snapshot,
+            permissions,
+          },
+          `Local recorder ready (nativeAddon=${runtimeStatus.nativeAddonLoaded}, daemonRunning=${daemonRunning}).`,
         );
       } catch (err) {
         return errorResult(err);
@@ -788,6 +845,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("[anti-meeting] fatal error:", err);
+  console.error("[meeting-notes] fatal error:", err);
   process.exit(1);
 });

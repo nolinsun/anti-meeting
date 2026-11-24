@@ -11,7 +11,7 @@ struct CLIArgs {
     static func parse() -> CLIArgs {
         let homeSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        var dataDir = homeSupport.appendingPathComponent("AntigravityMeeting")
+        var dataDir = homeSupport.appendingPathComponent("MeetingNotes")
         var socketOverride: String?
         var chunkSec: Double = ChunkWriter.defaultChunkDurationSec
         var selfTestDir: URL?

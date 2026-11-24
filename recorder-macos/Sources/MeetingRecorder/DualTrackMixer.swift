@@ -274,7 +274,7 @@ final class DualTrackMixer: @unchecked Sendable {
     static let syncToleranceSamples: Int64 = 320 // 20ms jitter tolerance on subsequent blocks
 
     private let stateLock = NSLock()
-    private let mixerQueue = DispatchQueue(label: "com.antigravity.meeting.dualmixer")
+    private let mixerQueue = DispatchQueue(label: "io.github.nolinsun.meeting.dualmixer")
     private let realTimeClock: Bool
     private let onMixedBlock: @Sendable ([Float], [Float], [Float]) -> Void
     private let onDriftGap: (@Sendable (Double, Double, String) -> Void)?

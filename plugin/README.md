@@ -1,27 +1,33 @@
-# anti-meeting
+# Meeting Notes
 
 > [!IMPORTANT]
-> **仅支持 macOS（macOS Only）**
-> 本插件依赖 macOS 原生音频接口（Core Audio Process Tap / AVFoundation）与 Swift 守护进程 `MeetingRecorder.app`，**不支持 Windows 或 Linux**。
-> 请从源码仓库执行 `npm run install:plugin` 在本机完成编译与安装（勿直接跨机器复制未签名二进制）。
+> **macOS 14.2+ Required for Audio Recording**
+> Dual-track system audio + microphone recording uses **macOS Core Audio Process Tap** & **AVFoundation** (`MeetingRecorder.app`). Windows and Linux can still browse, search, and manage existing meeting notes and transcripts, while local recording requires macOS 14.2+ and Xcode Command Line Tools (`xcode-select --install`).
 
-## 功能简介
+## Overview
 
-**anti-meeting** 是面向 Google Antigravity 的本地会议录制与纪要生成插件：
+**Meeting Notes** is a local meeting recorder, dual-track speaker timeline generator, and structured Markdown notes plugin for **Google Antigravity**:
 
-- 支持 **双轨录制**（全局系统音频 + 麦克风，兼容 Zoom / 飞书 / 腾讯会议 / 浏览器等）与 **仅麦克风** 两种模式；
-- 在后台独立运行，不打断 Antigravity 会话切换；
-- 内置 `meeting-notes` 技能，支持按切片断点转写、结合 `timelines/*.json` 区分「我方 / 对方」、并在侧边栏以完整 GitHub 风格 Markdown 展示逐字稿与会议纪要。
+- **Dual-Track & Mic-Only Capture**: Record global macOS system audio alongside your microphone (compatible with Zoom, Google Meet, Microsoft Teams, Feishu/Lark, Tencent Meeting, and browser calls), or record microphone-only voice notes.
+- **No Prebuilt Unsigned Binaries (Local Setup)**: To keep the plugin clean and avoid Apple Gatekeeper quarantine prompts, no precompiled `.app` or `.node` binaries are bundled. Click **Initialize Local Recorder** in the side pane on first use (about 20–40 seconds) to compile `MeetingRecorder.app` locally into your plugin data directory (`${PLUGIN_DATA}/bin/`).
+- **Bilingual UI (EN / 中文)**: Switch between **English** (default) and **Chinese** anytime from the top bar; preference is saved locally per workspace profile.
+- **Background Daemon & Resumable Transcription**: Recording continues reliably in the background across Antigravity conversation switches and handles device changes or lid-close finalization. Trigger `meeting-notes` from the side pane to transcribe chunks with checkpoints and render full GFM Markdown notes.
 
-## 使用前准备（macOS）
+## Privacy & Data Flow
 
-1. 环境要求：macOS 26.0+、Node.js 22+、Xcode Command Line Tools（含 Swift 6.2）。
-2. 在「系统设置 → 隐私与安全性」中为 `MeetingRecorder` 开启：
-   - **麦克风**权限；
-   - **录屏与系统录音 → 仅系统音频录制**权限（使用双轨录制时必需）。
+- **100% Local Storage**: Audio chunks (`.m4a`), speaker timelines (`timelines/*.json`), transcripts, and Markdown notes live strictly on your machine under `${PLUGIN_DATA}/meetings/` (nothing is uploaded to any third-party recording cloud).
+- **On-Demand Model Access**: Audio chunks are only read by the agent when you explicitly click **Generate Notes** or invoke the `meeting-notes` skill / MCP tools.
+- **Configurable Retention**: Keep raw `.m4a` files manually, auto-clean them after notes finish, or expire raw audio after 7 days while preserving notes and transcripts.
 
-## 常用提示词
+## macOS Permissions
 
-- `打开 anti-meeting 侧边栏并开始录制语音`
-- `整理最近一场会议并生成结构化纪要和待办事项`
-- `搜索历史会议中关于预算或接口方案的讨论`
+Before your first recording, grant `MeetingRecorder` access under **System Settings → Privacy & Security**:
+
+1. **Microphone** (required for all recording modes).
+2. **Screen & System Audio Recording → System Audio Recording Only** (required for Dual-Track mode).
+
+## Starter Prompts
+
+- `Open the Meeting Notes side pane and start recording a meeting`
+- `Transcribe my most recent meeting and generate structured notes with action items`
+- `Search past meeting notes and transcripts for budget or architecture decisions`

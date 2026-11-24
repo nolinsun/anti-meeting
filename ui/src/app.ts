@@ -3,6 +3,7 @@ import {
   applyDocumentTheme,
   applyHostStyleVariables,
 } from "@modelcontextprotocol/ext-apps";
+import { getStrings, type UiLang } from "./i18n";
 import { escapeHtml, renderMarkdown } from "./markdown";
 
 interface ChunkRecord {
@@ -41,6 +42,19 @@ interface PermissionSnapshot {
   systemAudio: string;
   otherAudioPlaying?: boolean;
   tapReady?: boolean;
+}
+
+interface RuntimeStatus {
+  platform: string;
+  supported: boolean;
+  appReady: boolean;
+  needsRebuild: boolean;
+  sourcesAvailable: boolean;
+  hasSwiftToolchain: boolean;
+  nativeAddonLoaded: boolean;
+  building: boolean;
+  buildStage: string | null;
+  lastBuildError: string | null;
 }
 
 interface MeetingSummary {
@@ -121,6 +135,9 @@ interface CopiedPromptFallback {
 interface AppState {
   tab: "live" | "history";
   historyDetailOpen: boolean;
+  lang: UiLang;
+  langInitializedFromServer: boolean;
+  runtimeStatus: RuntimeStatus | null;
   selectedMode: "dual" | "mic";
   audioRetentionPolicy: "manual" | "after_notes" | "days_7";
   hasMessageCap: boolean;
@@ -150,11 +167,14 @@ interface AppState {
   toastText: string | null;
 }
 
-const app = new App({ name: "anti-meeting", version: "0.3.1" }, {});
+const app = new App({ name: "meeting-notes", version: "0.4.0" }, {});
 
 const state: AppState = {
   tab: "live",
   historyDetailOpen: false,
+  lang: "en",
+  langInitializedFromServer: false,
+  runtimeStatus: null,
   selectedMode: "dual",
   audioRetentionPolicy: "manual",
   hasMessageCap: false,
@@ -286,7 +306,7 @@ function formatBytes(bytes: number): string {
 function extractToolTextError(res: { isError?: boolean; content?: Array<{ type: string; text?: string }> }): string | null {
   if (!res.isError) return null;
   const msg = res.content?.find((c) => c.type === "text")?.text;
-  return msg || "操作失败";
+  return msg || getStrings(state.lang).actionFailed;
 }
 
 function isEditingProtectedInput(): boolean {
@@ -322,16 +342,30 @@ async function pollLiveOnce(options?: { autoLaunch?: boolean; forceRender?: bool
       return;
     }
     const data = (res.structuredContent ?? {}) as {
+      runtimeStatus?: RuntimeStatus;
       daemonRunning?: boolean;
       daemonError?: string | null;
       snapshot?: RecorderSnapshot | null;
       permissions?: PermissionSnapshot;
-      settings?: { audioRetentionPolicy?: "manual" | "after_notes" | "days_7" };
+      settings?: {
+        audioRetentionPolicy?: "manual" | "after_notes" | "days_7";
+        uiLanguage?: UiLang;
+      };
       recentMeetings?: MeetingSummary[];
       selectedMeeting?: { summary: MeetingSummary; revision: string } | null;
       activeNotesJobIds?: string[];
       trackedSummaries?: Record<string, MeetingSummary>;
     };
+    if (data.runtimeStatus) {
+      state.runtimeStatus = data.runtimeStatus;
+    }
+    if (
+      !state.langInitializedFromServer &&
+      (data.settings?.uiLanguage === "en" || data.settings?.uiLanguage === "zh")
+    ) {
+      state.lang = data.settings.uiLanguage;
+      state.langInitializedFromServer = true;
+    }
     state.daemonRunning = Boolean(data.daemonRunning);
     state.daemonError = data.daemonError ?? null;
     state.snapshot = data.snapshot ?? null;
@@ -369,7 +403,7 @@ async function pollLiveOnce(options?: { autoLaunch?: boolean; forceRender?: bool
       if (completed || serverCleared) {
         delete state.generatingSessions[jobId];
         if (completed) {
-          completedJobToast = "会议纪要已生成";
+          completedJobToast = getStrings(state.lang).notesGeneratedToast;
         }
       }
     }
@@ -421,6 +455,8 @@ async function pollLiveOnce(options?: { autoLaunch?: boolean; forceRender?: bool
     }
 
     const sig = JSON.stringify({
+      lang: state.lang,
+      runtimeStatus: state.runtimeStatus,
       daemonRunning: state.daemonRunning,
       daemonError: state.daemonError,
       snapshot: state.snapshot,
@@ -441,6 +477,8 @@ async function pollLiveOnce(options?: { autoLaunch?: boolean; forceRender?: bool
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     const sig = JSON.stringify({
+      lang: state.lang,
+      runtimeStatus: state.runtimeStatus,
       daemonRunning: state.daemonRunning,
       daemonError: errMsg,
       snapshot: state.snapshot,
@@ -508,19 +546,101 @@ async function loadMeetingDetail(meetingId: string) {
 }
 
 function describeSystemAudioOutcome(outcome: string, otherAudioPlaying?: boolean): string {
+  const t = getStrings(state.lang);
   switch (outcome) {
     case "granted":
-      return "已捕获到系统音频信号，双轨系统音权限正常。";
+      return t.probeOutcomeGranted;
     case "silent_or_denied":
-      return "系统音频采集为全静音：可能是「系统设置 → 隐私与安全性 → 录屏与系统录音 → 仅系统音频录制」未勾选 MeetingRecorder，也可能是系统已静音或当前应用仅打开了静音流。确认授权后请点击「重启并重检」。";
+      return t.probeOutcomeSilent;
     case "tap_failed":
-      return "系统音频 Tap 启动失败，请检查「仅系统音频录制」权限或默认输出设备状态。";
+      return t.probeOutcomeTapFailed;
     case "timeout":
-      return "系统音频 Tap 启动超时，尚未完成通道与权限验证，请稍后重试或重启采集服务。";
+      return t.probeOutcomeTimeout;
     default:
-      return otherAudioPlaying
-        ? "系统音频 Tap 通道就绪，但短时内未收到非静音波形，可重试检测或检查系统静音状态。"
-        : "系统音频 Tap 通道就绪，当前未检测到其他应用播放音频；可播放声音后再点「检测音频权限」，或直接开始录制。";
+      return otherAudioPlaying ? t.probeOutcomeOtherPlaying : t.probeOutcomeTapReadyIdle;
+  }
+}
+
+async function handleSetLanguage(nextLang: UiLang) {
+  if (nextLang === state.lang) return;
+  state.lang = nextLang;
+  state.langInitializedFromServer = true;
+  state.lastAudioProbeMessage = null;
+  render();
+  try {
+    const res = await app.callServerTool({
+      name: "app_set_settings",
+      arguments: { uiLanguage: nextLang },
+    });
+    const err = extractToolTextError(res as never);
+    if (err) {
+      state.bannerError = err;
+      render();
+    }
+  } catch (err) {
+    state.bannerError = err instanceof Error ? err.message : String(err);
+    render();
+  }
+}
+
+async function handleSetupRuntime() {
+  if (state.actionBusy || state.runtimeStatus?.building) return;
+  const wasReady = Boolean(state.runtimeStatus?.appReady);
+  state.actionBusy = true;
+  state.bannerError = null;
+  if (state.runtimeStatus) {
+    state.runtimeStatus = {
+      ...state.runtimeStatus,
+      building: true,
+      lastBuildError: null,
+    };
+  }
+  render();
+  try {
+    const res = await app.callServerTool(
+      { name: "app_setup_runtime", arguments: {} },
+      { timeout: 200000 },
+    );
+    const err = extractToolTextError(res as never);
+    if (err) {
+      state.bannerError = err;
+      if (state.runtimeStatus) {
+        state.runtimeStatus = {
+          ...state.runtimeStatus,
+          building: false,
+          lastBuildError: err,
+        };
+      }
+    } else {
+      const data = (res.structuredContent ?? {}) as {
+        runtimeStatus?: RuntimeStatus;
+        daemonRunning?: boolean;
+        daemonError?: string | null;
+        snapshot?: RecorderSnapshot | null;
+        permissions?: PermissionSnapshot;
+      };
+      if (data.runtimeStatus) state.runtimeStatus = data.runtimeStatus;
+      state.daemonRunning = Boolean(data.daemonRunning);
+      state.daemonError = data.daemonError ?? null;
+      if (data.snapshot) state.snapshot = data.snapshot;
+      if (data.permissions) state.permissions = data.permissions;
+      const t = getStrings(state.lang);
+      showToast(wasReady ? t.runtimeUpdateDoneToast : t.runtimeInitDoneToast);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    state.bannerError = msg;
+    if (state.runtimeStatus) {
+      state.runtimeStatus = {
+        ...state.runtimeStatus,
+        building: false,
+        lastBuildError: msg,
+      };
+    }
+  } finally {
+    state.actionBusy = false;
+    render();
+    await pollLiveOnce({ forceRender: true });
   }
 }
 
@@ -536,6 +656,7 @@ async function handleRequestPermission(
     state.lastAudioProbeMessage = null;
   }
   render();
+  const t = getStrings(state.lang);
   try {
     const res = await app.callServerTool({
       name: "app_request_permission",
@@ -545,7 +666,7 @@ async function handleRequestPermission(
     if (err) {
       state.bannerError = err;
       if (kind === "systemAudio" && !openSettings) {
-        state.lastAudioProbeMessage = `系统音频检测失败：${err}`;
+        state.lastAudioProbeMessage = t.probeFailed(err);
       }
     } else {
       const data = (res.structuredContent ?? {}) as {
@@ -565,7 +686,7 @@ async function handleRequestPermission(
           const probeErr = extractToolTextError(probeRes as never);
           if (probeErr) {
             state.bannerError = probeErr;
-            state.lastAudioProbeMessage = `重启后系统音频检测失败：${probeErr}`;
+            state.lastAudioProbeMessage = t.probeAfterRestartFailed(probeErr);
             showToast(state.lastAudioProbeMessage);
             return;
           }
@@ -576,30 +697,30 @@ async function handleRequestPermission(
           if (probeData.permissions) state.permissions = probeData.permissions;
           const outcome = probeData.probeOutcome;
           if (!outcome) {
-            state.lastAudioProbeMessage = "当前采集服务繁忙或未完成系统音频检测，请稍后重试。";
+            state.lastAudioProbeMessage = t.probeBusyRetry;
             showToast(state.lastAudioProbeMessage);
             return;
           }
           const msg = describeSystemAudioOutcome(outcome, state.permissions.otherAudioPlaying);
           state.lastAudioProbeMessage = msg;
-          showToast(outcome === "granted" ? "采集服务已重启，系统音频权限已就绪" : msg);
+          showToast(outcome === "granted" ? t.restartedSysOk : msg);
         } else {
           const micState = data.permissions?.mic ?? state.permissions.mic;
           if (micState === "granted") {
-            state.lastAudioProbeMessage = "采集服务已重启，麦克风权限已就绪。";
-            showToast("采集服务已重启，麦克风权限已就绪");
+            state.lastAudioProbeMessage = t.restartedMicOk;
+            showToast(t.restartedMicOk);
           } else if (micState === "not_determined") {
-            showToast("采集服务已重启，请点击「授权麦克风」完成授权");
+            showToast(t.restartedMicPrompt);
           } else {
-            showToast("已重启采集服务但仍无麦克风权限。请在隐私设置中关闭再开启 MeetingRecorder 后重试。");
+            showToast(t.restartedMicStillDenied);
           }
         }
       } else if (kind === "mic" && data.prompting) {
-        showToast("请在系统弹窗中点击允许访问麦克风");
+        showToast(t.micPromptToast);
       } else if (kind === "systemAudio" && !openSettings) {
         const outcome = data.probeOutcome;
         if (!outcome) {
-          state.lastAudioProbeMessage = "当前采集服务繁忙或未完成系统音频检测，请稍后重试。";
+          state.lastAudioProbeMessage = t.probeBusyRetry;
           showToast(state.lastAudioProbeMessage);
         } else {
           const msg = describeSystemAudioOutcome(outcome, state.permissions.otherAudioPlaying);
@@ -612,7 +733,7 @@ async function handleRequestPermission(
     const errMsg = err instanceof Error ? err.message : String(err);
     state.bannerError = errMsg;
     if (kind === "systemAudio" && !openSettings) {
-      state.lastAudioProbeMessage = `系统音频检测失败：${errMsg}`;
+      state.lastAudioProbeMessage = t.probeFailed(errMsg);
     }
   } finally {
     state.actionBusy = false;
@@ -665,6 +786,7 @@ async function handleStopRecording() {
   state.actionBusy = true;
   state.bannerError = null;
   render();
+  const t = getStrings(state.lang);
   try {
     const res = await app.callServerTool({
       name: "meeting_stop",
@@ -688,12 +810,12 @@ async function handleStopRecording() {
       }
       const st = data.manifest?.status;
       if (st === "empty") {
-        showToast("未录到有效语音（空录音）");
+        showToast(t.stoppedEmptyToast);
       } else if (st === "partial") {
-        state.bannerError = data.manifest?.lastError || "部分切片封包失败或发生设备中断，已保存可用内容";
-        showToast("已保存部分录音切片");
+        state.bannerError = data.manifest?.lastError || t.stoppedPartialError;
+        showToast(t.stoppedPartialToast);
       } else {
-        showToast("录音已安全封包");
+        showToast(t.stoppedOkToast);
       }
     }
   } catch (err) {
@@ -706,6 +828,31 @@ async function handleStopRecording() {
 }
 
 function buildTranscribePrompt(meeting: MeetingSummary): string {
+  // Pass only validated meetingId, static mode tag & numeric counts; never interpolate untrusted title strings into user prompt.
+  if (state.lang === "en") {
+    const modeNote =
+      meeting.mode === "dual"
+        ? "This is a dual-track recording (mix, mic, remote tracks + speaker timelines). Use timelines/*.json to label Me vs. Remote speakers."
+        : "";
+    const parallelHint =
+      meeting.chunkCount > 4
+        ? "Because this long meeting has >4 chunks, group 2–3 chunks per read-only research subagent concurrently per the meeting-notes skill, then persist each chunk and stitch serially."
+        : "";
+    const resumeHint =
+      meeting.transcribedChunkCount > 0 && meeting.missingChunkCount > 0
+        ? `Currently ${meeting.transcribedChunkCount}/${meeting.chunkCount} chunks are transcribed; resume the remaining missing chunks before stitching notes.`
+        : "";
+    return [
+      `Use the meeting-notes skill to transcribe and summarize meeting \`${meeting.id}\` (${meeting.chunkCount} chunks).`,
+      modeNote,
+      parallelHint,
+      resumeHint,
+      `Call \`meeting_get({ meetingId: "${meeting.id}" })\` first to inspect chunk paths and resume state, transcribe readable chunks and persist each via \`meeting_save_result\`, then save the stitched transcript and structured notes.`,
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+
   const modeNote =
     meeting.mode === "dual"
       ? "该会议为双轨录制（含混音、我方/对方分轨与说话人时间线），请结合 timelines/*.json 标注「我方」与「对方」。"
@@ -718,7 +865,6 @@ function buildTranscribePrompt(meeting: MeetingSummary): string {
     meeting.transcribedChunkCount > 0 && meeting.missingChunkCount > 0
       ? `当前已完成 ${meeting.transcribedChunkCount}/${meeting.chunkCount} 个切片，请先补转剩余缺失切片后再汇总纪要。`
       : "";
-  // Pass only validated meetingId, static mode tag & numeric counts; never interpolate untrusted title strings into user prompt.
   return [
     `请使用 meeting-notes 技能整理会议 \`${meeting.id}\`（共 ${meeting.chunkCount} 个切片）。`,
     modeNote,
@@ -751,6 +897,7 @@ async function handleSendToAgent(
   state.actionBusy = true;
   state.bannerError = null;
   render();
+  const t = getStrings(state.lang);
   const prompt = buildTranscribePrompt(meeting);
   const claimToken =
     typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
@@ -783,7 +930,7 @@ async function handleSendToAgent(
           if (!state.activeNotesJobIds.includes(meeting.id)) {
             state.activeNotesJobIds = [...state.activeNotesJobIds, meeting.id];
           }
-          showToast("该会议已在另一会话中生成纪要");
+          showToast(t.jobAlreadyRunningToast);
           return;
         }
         if (claimData.claimed !== true) {
@@ -796,8 +943,8 @@ async function handleSendToAgent(
               { timeout: 2500 },
             )
             .catch(() => {});
-          state.bannerError = "任务占锁返回异常，未发送生成请求，请稍后重试。";
-          showToast("任务占锁状态异常，请重试");
+          state.bannerError = t.lockInvalidBanner;
+          showToast(t.lockInvalidToast);
           return;
         }
         claimedLock = true;
@@ -816,8 +963,8 @@ async function handleSendToAgent(
           )
           .catch(() => {});
         const detail = claimErr instanceof Error ? claimErr.message : String(claimErr);
-        state.bannerError = `确认生成任务状态超时或失败（${detail}），请稍后重试。`;
-        showToast("任务锁确认超时，请稍后重试");
+        state.bannerError = t.lockTimeoutBanner(detail);
+        showToast(t.lockTimeoutToast);
         return;
       }
       // Best-effort cross-panel lock: only skip when server doesn't implement app_notes_job.
@@ -867,9 +1014,9 @@ async function handleSendToAgent(
     showToast(
       target === "new"
         ? conversationId
-          ? "已开启独立会话生成纪要"
-          : "已在新独立会话中开始生成纪要"
-        : "已发送至当前对话生成纪要",
+          ? t.startedNewSessionIdToast
+          : t.startedNewSessionToast
+        : t.sentCurrentChatToast,
     );
   } catch (err) {
     const errDetail = err instanceof Error ? err.message : String(err);
@@ -901,10 +1048,10 @@ async function handleSendToAgent(
       prompt,
       allowCurrentChatFallback: target === "new" && state.hasMessageCap,
       reason: state.hasMessageCap
-        ? `独立后台会话触发失败（${errDetail}），已复制生成指令；你可直接粘贴到新对话，或点击「改在当前对话生成」。`
-        : `当前视图暂不支持自动发送消息（${errDetail}）；请在右侧边栏「+ → anti-meeting」中点击「生成纪要」，或粘贴已复制指令到任意对话。`,
+        ? t.copiedPromptReasonSameChat(errDetail)
+        : t.copiedPromptReasonNoCap(errDetail),
     };
-    showToast("暂无法直连新会话，已自动复制生成指令");
+    showToast(t.copiedPromptToast);
   } finally {
     state.actionBusy = false;
     render();
@@ -918,6 +1065,7 @@ async function handleChangeRetentionPolicy(policy: "manual" | "after_notes" | "d
   state.actionBusy = true;
   state.bannerError = null;
   render();
+  const t = getStrings(state.lang);
   try {
     const res = await app.callServerTool({
       name: "app_set_settings",
@@ -942,9 +1090,9 @@ async function handleChangeRetentionPolicy(policy: "manual" | "after_notes" | "d
       }
       const cleanedCount = data.cleanedCount ?? 0;
       if (cleanedCount > 0) {
-        showToast(`策略已保存，已自动清理 ${cleanedCount} 场已完成会议原音频（释放 ${formatBytes(data.freedBytes ?? 0)}）`);
+        showToast(t.retentionSavedCleanedToast(cleanedCount, formatBytes(data.freedBytes ?? 0)));
       } else {
-        showToast("原音频留存策略已更新");
+        showToast(t.retentionSavedToast);
       }
       await pollLiveOnce({ forceRender: true });
       if (state.historyDetailOpen && state.selectedMeetingId) {
@@ -966,6 +1114,7 @@ async function handleCleanupAudio(meetingId: string) {
   state.confirmCleanupId = null;
   state.bannerError = null;
   render();
+  const t = getStrings(state.lang);
   try {
     const res = await app.callServerTool({
       name: "app_cleanup_audio",
@@ -976,7 +1125,7 @@ async function handleCleanupAudio(meetingId: string) {
       state.bannerError = err;
     } else {
       const data = (res.structuredContent ?? {}) as { freedBytes?: number };
-      showToast(`已清理原音频，释放 ${formatBytes(data.freedBytes ?? 0)}`);
+      showToast(t.audioCleanedToast(formatBytes(data.freedBytes ?? 0)));
       await pollLiveOnce({ forceRender: true });
       if (state.selectedMeetingId === meetingId) {
         await loadMeetingDetail(meetingId);
@@ -996,6 +1145,7 @@ async function handleDeleteMeeting(meetingId: string) {
   state.confirmDeleteId = null;
   state.bannerError = null;
   render();
+  const t = getStrings(state.lang);
   try {
     const res = await app.callServerTool({
       name: "app_delete_meeting",
@@ -1005,8 +1155,11 @@ async function handleDeleteMeeting(meetingId: string) {
     if (err) {
       state.bannerError = err;
     } else {
-      showToast("会议已删除");
+      showToast(t.meetingDeletedToast);
       delete state.generatingSessions[meetingId];
+      if (state.justStoppedMeetingId === meetingId) {
+        state.justStoppedMeetingId = null;
+      }
       if (state.selectedMeetingId === meetingId) {
         state.selectedMeetingId = null;
         state.selectedDetail = null;
@@ -1028,6 +1181,7 @@ async function handleSaveRename(meetingId: string) {
   state.actionBusy = true;
   state.bannerError = null;
   render();
+  const t = getStrings(state.lang);
   try {
     const res = await app.callServerTool({
       name: "app_rename_meeting",
@@ -1038,7 +1192,7 @@ async function handleSaveRename(meetingId: string) {
       state.bannerError = err;
     } else {
       state.renamingId = null;
-      showToast("标题已更新");
+      showToast(t.titleUpdatedToast);
       await pollLiveOnce({ forceRender: true });
       if (state.selectedMeetingId === meetingId) {
         await loadMeetingDetail(meetingId);
@@ -1082,10 +1236,11 @@ async function handleSearch(query: string) {
 }
 
 async function copyMarkdownText(text: string, silent = false): Promise<boolean> {
+  const t = getStrings(state.lang);
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);
-      if (!silent) showToast("已复制到剪贴板");
+      if (!silent) showToast(t.copiedToast);
       return true;
     }
   } catch {
@@ -1100,73 +1255,58 @@ async function copyMarkdownText(text: string, silent = false): Promise<boolean> 
   const ok = document.execCommand("copy");
   document.body.removeChild(ta);
   if (!silent) {
-    showToast(ok ? "已复制到剪贴板" : "复制失败，请手动选中文本复制");
+    showToast(ok ? t.copiedToast : t.copyFailedToast);
   }
   return ok;
 }
 
 function renderMeetingStatusBadge(m: MeetingSummary): string {
-  if (m.status === "recording") return `<span class="badge partial">录制中</span>`;
-  if (m.status === "finalizing") return `<span class="badge partial">封包中</span>`;
-  if (m.status === "empty") return `<span class="badge">空录音</span>`;
+  const t = getStrings(state.lang);
+  if (m.status === "recording") return `<span class="badge partial">${t.badgeRecording}</span>`;
+  if (m.status === "finalizing") return `<span class="badge partial">${t.badgeFinalizing}</span>`;
+  if (m.status === "empty") return `<span class="badge">${t.badgeEmpty}</span>`;
   if (isMeetingGenerating(m.id)) {
-    return `<span class="badge generating">独立会话生成中</span>`;
+    return `<span class="badge generating">${t.badgeGenerating}</span>`;
   }
   if (m.status === "partial" || m.failedChunkCount > 0) {
-    return `<span class="badge partial">部分完成</span>`;
+    return `<span class="badge partial">${t.badgePartial}</span>`;
   }
   if (m.hasNotes && m.missingChunkCount === 0) {
-    return `<span class="badge done">已完成纪要</span>`;
+    return `<span class="badge done">${t.badgeNotesDone}</span>`;
   }
   if (m.transcribedChunkCount > 0) {
-    return `<span class="badge partial">已转写 ${m.transcribedChunkCount}/${m.chunkCount}</span>`;
+    return `<span class="badge partial">${t.badgeTranscribed(m.transcribedChunkCount, m.chunkCount)}</span>`;
   }
-  return `<span class="badge">待转写 (${m.chunkCount} 片)</span>`;
+  return `<span class="badge">${t.badgePending(m.chunkCount)}</span>`;
 }
 
 function renderSystemStatusBadge(sysStatus: string): string {
+  const t = getStrings(state.lang);
   if (sysStatus === "granted") {
-    return `<span class="sys-pill granted">系统音频已捕获</span>`;
+    return `<span class="sys-pill granted">${t.sysPillGranted}</span>`;
   }
   if (sysStatus === "silent_or_denied") {
-    return `<span class="sys-pill warn">系统音频静音/未授权</span>`;
+    return `<span class="sys-pill warn">${t.sysPillSilentOrDenied}</span>`;
   }
   if (sysStatus === "tap_failed") {
-    return `<span class="sys-pill error">系统音频降级</span>`;
+    return `<span class="sys-pill error">${t.sysPillTapFailed}</span>`;
   }
-  return `<span class="sys-pill">等待系统音</span>`;
-}
-
-function formatGapReason(reason: string): string {
-  switch (reason) {
-    case "audio_device_changed":
-      return "音频设备切换";
-    case "audio_device_lost":
-      return "音频设备中断";
-    case "system_audio_tap_failed":
-      return "系统音频捕获失败";
-    case "system_audio_reconnecting":
-      return "系统音频重连";
-    case "system_audio_device_changed":
-      return "系统输出设备切换";
-    case "system_audio_silent":
-      return "系统音频无信号";
-    default:
-      return reason || "未知原因";
-  }
+  return `<span class="sys-pill">${t.sysPillWaiting}</span>`;
 }
 
 function transcribeButtonLabel(m: MeetingSummary): string {
+  const t = getStrings(state.lang);
   if (isMeetingGenerating(m.id)) {
-    return "独立会话生成中...";
+    return t.generatingInSession;
   }
   if (m.transcribedChunkCount > 0 && m.missingChunkCount > 0) {
-    return `补转缺失 (${m.transcribedChunkCount}/${m.chunkCount})`;
+    return t.btnResumeMissing(m.transcribedChunkCount, m.chunkCount);
   }
-  return m.hasNotes ? "重新生成纪要" : "生成纪要";
+  return m.hasNotes ? t.btnRegenerateNotes : t.btnGenerateNotes;
 }
 
 function renderLiveTab(): string {
+  const t = getStrings(state.lang);
   const snap = state.snapshot;
   const recState = snap?.state ?? "idle";
   const isRecording = recState === "recording";
@@ -1182,25 +1322,67 @@ function renderLiveTab(): string {
       : state.permissions.systemAudio;
   const probeDisabled = state.actionBusy || isRecording || isFinalizing;
 
+  let runtimeBannerHtml = "";
+  if (state.runtimeStatus && !state.runtimeStatus.supported) {
+    runtimeBannerHtml = `
+      <div class="banner info" data-macos-only-banner="true">
+        <div>
+          <strong>${escapeHtml(t.macosOnlyTitle)}</strong>
+          <div class="muted-note">${escapeHtml(t.macosOnlyDesc)}</div>
+        </div>
+      </div>
+    `;
+  } else if (state.runtimeStatus && (!state.runtimeStatus.appReady || state.runtimeStatus.needsRebuild)) {
+    const rs = state.runtimeStatus;
+    const isUpdate = rs.appReady && rs.needsRebuild;
+    const setupDisabled = state.actionBusy || rs.building || !rs.sourcesAvailable;
+    runtimeBannerHtml = `
+      <div class="runtime-setup-card" data-runtime-setup="true">
+        <div class="runtime-setup-head">
+          <strong>${escapeHtml(isUpdate ? t.runtimeUpdateTitle : t.runtimeInitTitle)}</strong>
+          <button type="button" class="btn btn-primary btn-sm" data-action="setup-runtime" ${setupDisabled ? "disabled" : ""}>
+            ${svgIcon("settings")}${escapeHtml(rs.building ? t.runtimeBuildingBtn : isUpdate ? t.runtimeUpdateBtn : t.runtimeInitBtn)}
+          </button>
+        </div>
+        <div class="muted-note">${escapeHtml(isUpdate ? t.runtimeUpdateDesc : t.runtimeInitDesc)}</div>
+        ${
+          !rs.hasSwiftToolchain
+            ? `<div class="muted-note">${escapeHtml(t.runtimeMissingToolchain)}</div>`
+            : ""
+        }
+        ${
+          rs.buildStage
+            ? `<div class="muted-note">${escapeHtml(rs.buildStage)}</div>`
+            : ""
+        }
+        ${
+          rs.lastBuildError
+            ? `<div class="runtime-setup-error">${escapeHtml(rs.lastBuildError)}</div>`
+            : ""
+        }
+      </div>
+    `;
+  }
+
   let permBanner = "";
   if (state.daemonRunning && micPerm !== "granted") {
     const isDenied = micPerm === "denied" || micPerm === "restricted";
     const guidance = isDenied
-      ? `当前状态：${escapeHtml(micPerm)}。请在「系统设置 → 隐私与安全性 → 麦克风」中勾选 MeetingRecorder；若开关已是开启状态（常见于重签后），请先关闭再重新开启，然后点击「重启并重检权限」。`
-      : `当前状态：${escapeHtml(micPerm)}。请点击「授权麦克风」，或在系统设置麦克风列表中勾选 MeetingRecorder。`;
+      ? t.micBannerDenied(escapeHtml(micPerm))
+      : t.micBannerPrompt(escapeHtml(micPerm));
     permBanner = `
       <div class="banner">
         <div>
-          <strong>需要麦克风权限（MeetingRecorder）</strong>
+          <strong>${escapeHtml(t.micBannerTitle)}</strong>
           <div class="muted-note">${guidance}</div>
         </div>
         <div class="item-actions">
           ${
             isDenied
-              ? `<button class="btn btn-primary btn-sm" data-action="open-mic-settings" ${state.actionBusy ? "disabled" : ""}>打开隐私设置</button>
-                 <button class="btn btn-sm" data-action="recheck-mic" ${probeDisabled ? "disabled" : ""}>${svgIcon("refresh")}重启并重检权限</button>`
-              : `<button class="btn btn-primary btn-sm" data-action="request-mic" ${state.actionBusy ? "disabled" : ""}>授权麦克风</button>
-                 <button class="btn btn-sm" data-action="open-mic-settings" ${state.actionBusy ? "disabled" : ""}>打开隐私设置</button>`
+              ? `<button type="button" class="btn btn-primary btn-sm" data-action="open-mic-settings" ${state.actionBusy ? "disabled" : ""}>${escapeHtml(t.openPrivacySettings)}</button>
+                 <button type="button" class="btn btn-sm" data-action="recheck-mic" ${probeDisabled ? "disabled" : ""}>${svgIcon("refresh")}${escapeHtml(t.restartAndRecheck)}</button>`
+              : `<button type="button" class="btn btn-primary btn-sm" data-action="request-mic" ${state.actionBusy ? "disabled" : ""}>${escapeHtml(t.grantMic)}</button>
+                 <button type="button" class="btn btn-sm" data-action="open-mic-settings" ${state.actionBusy ? "disabled" : ""}>${escapeHtml(t.openPrivacySettings)}</button>`
           }
         </div>
       </div>
@@ -1217,32 +1399,29 @@ function renderLiveTab(): string {
     sysPermBanner = `
       <div class="banner ${isFailed ? "error" : ""}">
         <div>
-          <strong>${
-            isFailed
-              ? "系统音频捕获失败（已自动降级为仅麦克风）"
-              : "未检测到系统音频（输出静音或未授权）"
-          }</strong>
-          <div class="muted-note">${
-            isFailed
-              ? "系统音频 Tap 启动或重连失败，本次保留我方麦克风声轨，请检查「仅系统音频录制」权限或输出设备。"
-              : "检测到其他应用可能正在播音但系统轨无声。请确认未静音，并在「系统设置 → 隐私与安全性 → 录屏与系统录音 → 仅系统音频录制」勾选 MeetingRecorder。"
-          }</div>
+          <strong>${escapeHtml(isFailed ? t.sysBannerFailedTitle : t.sysBannerSilentTitle)}</strong>
+          <div class="muted-note">${escapeHtml(isFailed ? t.sysBannerFailedDesc : t.sysBannerSilentDesc)}</div>
         </div>
         <div class="item-actions">
           ${
             !isRecording && !isFinalizing
-              ? `<button class="btn btn-primary btn-sm" data-action="request-sysaudio" ${state.actionBusy ? "disabled" : ""}>${svgIcon("shield")}重新检测</button>
-                 <button class="btn btn-sm" data-action="recheck-sysaudio" ${state.actionBusy ? "disabled" : ""}>${svgIcon("refresh")}重启并重检</button>`
+              ? `<button type="button" class="btn btn-primary btn-sm" data-action="request-sysaudio" ${state.actionBusy ? "disabled" : ""}>${svgIcon("shield")}${escapeHtml(t.recheckSysAudio)}</button>
+                 <button type="button" class="btn btn-sm" data-action="recheck-sysaudio" ${state.actionBusy ? "disabled" : ""}>${svgIcon("refresh")}${escapeHtml(t.restartAndRecheck)}</button>`
               : ""
           }
-          <button class="btn btn-sm" data-action="open-sysaudio-settings" ${state.actionBusy ? "disabled" : ""}>打开隐私设置</button>
+          <button type="button" class="btn btn-sm" data-action="open-sysaudio-settings" ${state.actionBusy ? "disabled" : ""}>${escapeHtml(t.openPrivacySettings)}</button>
         </div>
       </div>
     `;
   }
 
   const micDotClass = micPerm === "granted" ? "ok" : micPerm === "not_determined" ? "neutral" : "err";
-  const micLabel = micPerm === "granted" ? "已授权" : micPerm === "not_determined" ? "待授权" : "未授权";
+  const micLabel =
+    micPerm === "granted"
+      ? t.permGranted
+      : micPerm === "not_determined"
+        ? t.permPending
+        : t.permDenied;
   const sysDotClass =
     sysStatus === "granted"
       ? "ok"
@@ -1253,28 +1432,28 @@ function renderLiveTab(): string {
           : "neutral";
   const sysDiagLabel =
     sysStatus === "granted"
-      ? "已验证有声"
+      ? t.sysVerified
       : sysStatus === "silent_or_denied"
-        ? "静音或未授权"
+        ? t.sysSilentOrDenied
         : sysStatus === "tap_failed"
-          ? "Tap 失败"
+          ? t.sysTapFailed
           : state.permissions.tapReady
-            ? "通道就绪 · 待有声验证"
-            : "待检测";
+            ? t.sysTapReadyPending
+            : t.sysPendingCheck;
 
   const permStripHtml = state.daemonRunning
     ? `
       <div class="perm-strip" data-perm-strip="true">
         <div class="perm-strip-head">
-          <span class="perm-strip-title">音频权限与设备</span>
+          <span class="perm-strip-title">${escapeHtml(t.permAudioTitle)}</span>
           <div class="item-actions">
             ${
               effectiveMode === "dual"
-                ? `<button class="btn btn-sm" data-action="request-sysaudio" ${probeDisabled ? "disabled" : ""}>${svgIcon("shield")}检测音频权限</button>
-                   <button class="btn btn-sm btn-ghost" data-action="recheck-sysaudio" ${probeDisabled ? "disabled" : ""} title="重启采集服务后重新检测">${svgIcon("refresh")}重启并重检</button>
-                   <button class="btn btn-sm btn-ghost" data-action="open-sysaudio-settings" ${state.actionBusy ? "disabled" : ""} title="系统隐私设置">${svgIcon("settings")}隐私设置</button>`
-                : `<button class="btn btn-sm btn-ghost" data-action="recheck-mic" ${probeDisabled ? "disabled" : ""} title="重启采集服务并重检麦克风">${svgIcon("refresh")}重启并重检</button>
-                   <button class="btn btn-sm btn-ghost" data-action="open-mic-settings" ${state.actionBusy ? "disabled" : ""} title="麦克风隐私设置">${svgIcon("settings")}隐私设置</button>`
+                ? `<button type="button" class="btn btn-sm" data-action="request-sysaudio" ${probeDisabled ? "disabled" : ""}>${svgIcon("shield")}${escapeHtml(t.checkAudioPerm)}</button>
+                   <button type="button" class="btn btn-sm btn-ghost" data-action="recheck-sysaudio" ${probeDisabled ? "disabled" : ""} title="${escapeHtml(t.restartAndRecheckTitle)}">${svgIcon("refresh")}${escapeHtml(t.restartAndRecheck)}</button>
+                   <button type="button" class="btn btn-sm btn-ghost" data-action="open-sysaudio-settings" ${state.actionBusy ? "disabled" : ""} title="${escapeHtml(t.privacySettingsTitle)}">${svgIcon("settings")}${escapeHtml(t.privacySettings)}</button>`
+                : `<button type="button" class="btn btn-sm btn-ghost" data-action="recheck-mic" ${probeDisabled ? "disabled" : ""} title="${escapeHtml(t.restartAndRecheckTitle)}">${svgIcon("refresh")}${escapeHtml(t.restartAndRecheck)}</button>
+                   <button type="button" class="btn btn-sm btn-ghost" data-action="open-mic-settings" ${state.actionBusy ? "disabled" : ""} title="${escapeHtml(t.privacySettingsTitle)}">${svgIcon("settings")}${escapeHtml(t.privacySettings)}</button>`
             }
           </div>
         </div>
@@ -1282,11 +1461,11 @@ function renderLiveTab(): string {
           <div class="perm-row">
             <span class="perm-row-left">
               <span class="dot ${micDotClass}"></span>
-              <span>麦克风</span>
-              <span class="perm-device">${escapeHtml(snap?.inputDeviceName || "默认输入设备")}</span>
+              <span>${escapeHtml(t.micLabel)}</span>
+              <span class="perm-device">${escapeHtml(snap?.inputDeviceName || t.defaultInputDevice)}</span>
             </span>
             <span class="perm-row-right">
-              <span class="badge ${micPerm === "granted" ? "done" : ""}">${micLabel}</span>
+              <span class="badge ${micPerm === "granted" ? "done" : ""}">${escapeHtml(micLabel)}</span>
             </span>
           </div>
           ${
@@ -1295,16 +1474,16 @@ function renderLiveTab(): string {
                 <div class="perm-row">
                   <span class="perm-row-left">
                     <span class="dot ${sysDotClass}"></span>
-                    <span>系统音频</span>
-                    <span class="perm-device">${escapeHtml(snap?.outputDeviceName || "默认输出设备")}</span>
+                    <span>${escapeHtml(t.sysAudioLabel)}</span>
+                    <span class="perm-device">${escapeHtml(snap?.outputDeviceName || t.defaultOutputDevice)}</span>
                   </span>
                   <span class="perm-row-right">
                     ${
                       state.permissions.otherAudioPlaying
-                        ? `<span class="badge">检测到播音</span>`
+                        ? `<span class="badge">${escapeHtml(t.audioPlayingBadge)}</span>`
                         : ""
                     }
-                    <span class="badge ${sysStatus === "granted" ? "done" : sysStatus === "silent_or_denied" ? "partial" : ""}">${sysDiagLabel}</span>
+                    <span class="badge ${sysStatus === "granted" ? "done" : sysStatus === "silent_or_denied" ? "partial" : ""}">${escapeHtml(sysDiagLabel)}</span>
                   </span>
                 </div>
               `
@@ -1315,7 +1494,7 @@ function renderLiveTab(): string {
           state.lastAudioProbeMessage
             ? `<div class="perm-note">
                  <span>${escapeHtml(state.lastAudioProbeMessage)}</span>
-                 <button class="btn btn-sm btn-ghost" data-action="dismiss-probe-msg" aria-label="关闭提示">${svgIcon("close")}</button>
+                 <button type="button" class="btn btn-sm btn-ghost" data-action="dismiss-probe-msg" aria-label="${escapeHtml(t.dismissHintAria)}">${svgIcon("close")}</button>
                </div>`
             : ""
         }
@@ -1341,15 +1520,15 @@ function renderLiveTab(): string {
     ? `
       <div class="cta-card">
         <div class="cta-card-head">
-          <strong>录音已封包：${escapeHtml(justStoppedMeeting.title)}</strong>
-          <span class="muted-note">${formatDuration(justStoppedMeeting.totalDurationSec)} · ${justStoppedMeeting.chunkCount} 片</span>
+          <strong>${escapeHtml(t.postStopTitle(justStoppedMeeting.title))}</strong>
+          <span class="muted-note">${escapeHtml(t.postStopMeta(formatDuration(justStoppedMeeting.totalDurationSec), justStoppedMeeting.chunkCount))}</span>
         </div>
         <div class="item-actions">
-          <button class="btn btn-primary btn-sm" data-action="transcribe" data-id="${escapeHtml(justStoppedMeeting.id)}" ${state.actionBusy || isMeetingGenerating(justStoppedMeeting.id) ? "disabled" : ""}>
-            ${svgIcon("notes")}${isMeetingGenerating(justStoppedMeeting.id) ? "独立会话生成中..." : "新建会话生成纪要"}
+          <button type="button" class="btn btn-primary btn-sm" data-action="transcribe" data-id="${escapeHtml(justStoppedMeeting.id)}" ${state.actionBusy || isMeetingGenerating(justStoppedMeeting.id) ? "disabled" : ""}>
+            ${svgIcon("notes")}${escapeHtml(isMeetingGenerating(justStoppedMeeting.id) ? t.generatingInSession : t.generateNotesNewSession)}
           </button>
-          <button class="btn btn-sm" data-action="open-detail" data-id="${escapeHtml(justStoppedMeeting.id)}">查看详情</button>
-          <button class="btn btn-sm btn-ghost" data-action="dismiss-cta">收起</button>
+          <button type="button" class="btn btn-sm" data-action="open-detail" data-id="${escapeHtml(justStoppedMeeting.id)}">${escapeHtml(t.viewDetails)}</button>
+          <button type="button" class="btn btn-sm btn-ghost" data-action="dismiss-cta">${escapeHtml(t.dismiss)}</button>
         </div>
       </div>
     `
@@ -1357,7 +1536,7 @@ function renderLiveTab(): string {
 
   const recentHtml =
     state.recentMeetings.length === 0
-      ? `<div class="empty-state">还没有会议记录，点击上方按钮开始第一次录制。</div>`
+      ? `<div class="empty-state">${escapeHtml(t.emptyMeetingsLive)}</div>`
       : state.recentMeetings
           .slice(0, 8)
           .map((m) => {
@@ -1366,28 +1545,43 @@ function renderLiveTab(): string {
               m.status !== "recording" &&
               m.status !== "finalizing" &&
               m.status !== "empty";
+            const isRecordingThis =
+              (state.snapshot?.meetingId === m.id &&
+                (state.snapshot?.state === "recording" || state.snapshot?.state === "finalizing")) ||
+              m.status === "recording" ||
+              m.status === "finalizing";
+            const canDelete = !isRecordingThis && !isMeetingGenerating(m.id);
+            const isConfirmingDel = state.confirmDeleteId === m.id;
             const actionLabel = transcribeButtonLabel(m);
             return `
               <div class="meeting-item clickable" data-action="open-detail" data-id="${escapeHtml(m.id)}">
                 <div class="meeting-item-top">
                   <div class="meeting-title">${escapeHtml(m.title)}</div>
                   <div class="item-actions">
-                    <span class="badge">${m.mode === "dual" ? "双轨" : "仅麦"}</span>
+                    <span class="badge">${escapeHtml(m.mode === "dual" ? t.modeDualShort : t.modeMicShort)}</span>
                     ${renderMeetingStatusBadge(m)}
                   </div>
                 </div>
                 <div class="meeting-meta">
                   <span>${escapeHtml(formatDate(m.createdAt))}</span>
                   <span>${formatDuration(m.totalDurationSec)}</span>
-                  <span>${m.chunkCount} 片 · ${formatBytes(m.audioBytesTotal)}</span>
+                  <span>${escapeHtml(t.chunksMeta(m.chunkCount, formatBytes(m.audioBytesTotal)))}</span>
                 </div>
                 <div class="item-actions">
                   ${
                     canTranscribe
-                      ? `<button class="btn btn-primary btn-sm" data-action="transcribe" data-id="${escapeHtml(m.id)}" ${state.actionBusy || isMeetingGenerating(m.id) ? "disabled" : ""}>${svgIcon("notes")}${actionLabel}</button>`
+                      ? `<button type="button" class="btn btn-primary btn-sm" data-action="transcribe" data-id="${escapeHtml(m.id)}" ${state.actionBusy || isMeetingGenerating(m.id) ? "disabled" : ""}>${svgIcon("notes")}${escapeHtml(actionLabel)}</button>`
                       : ""
                   }
-                  <button class="btn btn-sm" data-action="open-detail" data-id="${escapeHtml(m.id)}">查看详情</button>
+                  <button type="button" class="btn btn-sm" data-action="open-detail" data-id="${escapeHtml(m.id)}">${escapeHtml(t.viewDetails)}</button>
+                  ${
+                    canDelete
+                      ? isConfirmingDel
+                        ? `<button type="button" class="btn btn-danger btn-sm" data-action="confirm-delete" data-id="${escapeHtml(m.id)}" ${state.actionBusy ? "disabled" : ""}>${escapeHtml(t.confirmDelete)}</button>
+                           <button type="button" class="btn btn-sm" data-action="cancel-delete" ${state.actionBusy ? "disabled" : ""}>${escapeHtml(t.cancel)}</button>`
+                        : `<button type="button" class="btn btn-sm" data-action="ask-delete" data-id="${escapeHtml(m.id)}" ${state.actionBusy ? "disabled" : ""}>${escapeHtml(t.delete)}</button>`
+                      : ""
+                  }
                 </div>
               </div>
             `;
@@ -1405,34 +1599,55 @@ function renderLiveTab(): string {
     const summaryParts: string[] = [];
     if (liveGaps.length > 0 && latestGap) {
       summaryParts.push(
-        `已记录 ${liveGaps.length} 处音频缺口（最近：${formatDuration(latestGap.startSec)}–${formatDuration(latestGap.endSec)}，${escapeHtml(formatGapReason(latestGap.reason))}）`,
+        t.liveGapSummaryGaps(
+          liveGaps.length,
+          formatDuration(latestGap.startSec),
+          formatDuration(latestGap.endSec),
+          t.gapReason(latestGap.reason),
+        ),
       );
     }
     if (liveFailedChunks > 0) {
-      summaryParts.push(`${liveFailedChunks} 个切片写入失败`);
+      summaryParts.push(t.liveGapSummaryFailed(liveFailedChunks));
     }
+    const separator = state.lang === "en" ? "; " : "；";
     liveGapBanner = `
       <div class="banner" data-live-gap-banner="true">
         <div>
-          <strong>录制过程中发生音频缺口</strong>
-          <div class="muted-note">${summaryParts.join("；")}。已保存或恢复后的其余音频会继续录制并在纪要中如实标注。</div>
+          <strong>${escapeHtml(t.liveGapTitle)}</strong>
+          <div class="muted-note">${escapeHtml(summaryParts.join(separator) + t.liveGapTail)}</div>
         </div>
       </div>
     `;
   }
 
+  const showDaemonErrorBanner =
+    Boolean(state.daemonError) &&
+    !state.daemonRunning &&
+    !(state.runtimeStatus && (!state.runtimeStatus.supported || !state.runtimeStatus.appReady));
+
+  const recordBtnDisabled = isRecording
+    ? state.actionBusy || isFinalizing
+    : state.actionBusy ||
+      isFinalizing ||
+      (state.runtimeStatus !== null &&
+        (!state.runtimeStatus.supported ||
+          !state.runtimeStatus.appReady ||
+          state.runtimeStatus.building));
+
   return `
+    ${runtimeBannerHtml}
     ${permBanner}
     ${sysPermBanner}
     ${liveGapBanner}
     ${
-      state.daemonError && !state.daemonRunning
-        ? `<div class="banner error"><div><strong>采集守护进程未就绪</strong><div class="muted-note">${escapeHtml(state.daemonError)}</div></div><button class="btn btn-sm" data-action="retry-poll">重试连接</button></div>`
+      showDaemonErrorBanner
+        ? `<div class="banner error"><div><strong>${escapeHtml(t.daemonNotReadyTitle)}</strong><div class="muted-note">${escapeHtml(state.daemonError ?? "")}</div></div><button type="button" class="btn btn-sm" data-action="retry-poll">${escapeHtml(t.retryConnect)}</button></div>`
         : ""
     }
     <div class="card">
       <div class="section-title">
-        <span>采集方式</span>
+        <span>${escapeHtml(t.captureModeTitle)}</span>
       </div>
       <div class="mode-grid">
         <button
@@ -1443,10 +1658,10 @@ function renderLiveTab(): string {
           ${isRecording || isFinalizing ? "disabled" : ""}
         >
           <span class="mode-name-row">
-            <span class="mode-name">${svgIcon("dual")}双轨录制</span>
+            <span class="mode-name">${svgIcon("dual")}${escapeHtml(t.modeDualTitle)}</span>
             ${effectiveMode === "dual" ? svgIcon("check") : ""}
           </span>
-          <span class="mode-desc">系统音频 + 麦克风（Zoom / 飞书 / 腾讯 / 浏览器）</span>
+          <span class="mode-desc">${escapeHtml(t.modeDualDesc)}</span>
         </button>
         <button
           type="button"
@@ -1456,17 +1671,17 @@ function renderLiveTab(): string {
           ${isRecording || isFinalizing ? "disabled" : ""}
         >
           <span class="mode-name-row">
-            <span class="mode-name">${svgIcon("mic")}仅麦克风</span>
+            <span class="mode-name">${svgIcon("mic")}${escapeHtml(t.modeMicTitle)}</span>
             ${effectiveMode === "mic" ? svgIcon("check") : ""}
           </span>
-          <span class="mode-desc">仅采集麦克风（线下讨论 / 语音笔记）</span>
+          <span class="mode-desc">${escapeHtml(t.modeMicDesc)}</span>
         </button>
       </div>
       ${permStripHtml}
       ${
         !isRecording && !isFinalizing
           ? `<div class="input-row">
-               <input id="draft-title-input" class="text-input" type="text" maxlength="500" placeholder="可选：输入会议标题（留空按时间命名）" value="${escapeHtml(state.draftTitle)}" />
+               <input id="draft-title-input" class="text-input" type="text" maxlength="500" placeholder="${escapeHtml(t.draftTitlePlaceholder)}" value="${escapeHtml(state.draftTitle)}" />
              </div>`
           : ""
       }
@@ -1474,20 +1689,18 @@ function renderLiveTab(): string {
         type="button"
         class="btn record-action-btn ${isRecording ? "btn-danger" : "btn-primary"}"
         data-action="${isRecording ? "stop" : "start"}"
-        ${state.actionBusy || isFinalizing ? "disabled" : ""}
+        ${recordBtnDisabled ? "disabled" : ""}
       >
         ${
           recState === "starting"
-            ? effectiveMode === "dual"
-              ? "正在启动双轨采集..."
-              : "正在启动麦克风..."
+            ? escapeHtml(effectiveMode === "dual" ? t.startingDual : t.startingMic)
             : recState === "finalizing"
-              ? "正在封包音频切片..."
+              ? escapeHtml(t.finalizingChunks)
               : isRecording
-                ? `${svgIcon("stop")}停止录制并封包`
+                ? `${svgIcon("stop")}${escapeHtml(t.stopAndFinalize)}`
                 : effectiveMode === "dual"
-                  ? `${svgIcon("dual")}开始双轨录制`
-                  : `${svgIcon("mic")}开始仅麦克风录制`
+                  ? `${svgIcon("dual")}${escapeHtml(t.startDual)}`
+                  : `${svgIcon("mic")}${escapeHtml(t.startMic)}`
         }
       </button>
       ${
@@ -1496,12 +1709,12 @@ function renderLiveTab(): string {
             <div class="live-metrics">
               <div class="timer-row">
                 <span class="timer-value">${formatDuration(snap?.elapsedSec ?? 0)}</span>
-                <span class="muted-note">已提交 ${snap?.committedChunkCount ?? 0} 个切片（~5 分钟/片）</span>
+                <span class="muted-note">${escapeHtml(t.committedChunks(snap?.committedChunkCount ?? 0))}</span>
               </div>
               <div class="meter-group">
                 <div class="meter-row">
                   <div class="meter-label-row">
-                    <span>我方（麦克风）</span>
+                    <span>${escapeHtml(t.speakerMeMic)}</span>
                     <span>${mePct}%</span>
                   </div>
                   <div class="meter-track"><div class="meter-fill" style="width:${mePct}%"></div></div>
@@ -1511,7 +1724,7 @@ function renderLiveTab(): string {
                     ? `
                       <div class="meter-row">
                         <div class="meter-label-row">
-                          <span>对方（系统音频）</span>
+                          <span>${escapeHtml(t.speakerRemoteSys)}</span>
                           <span class="item-actions">${renderSystemStatusBadge(sysStatus)}<span>${remotePct}%</span></span>
                         </div>
                         <div class="meter-track"><div class="meter-fill remote" style="width:${remotePct}%"></div></div>
@@ -1523,14 +1736,14 @@ function renderLiveTab(): string {
               <div class="muted-note">${escapeHtml(snap?.title || "")}</div>
             </div>
           `
-          : `<div class="muted-note">录音在后台独立运行，可随时继续或切换其他 Antigravity 会话；点击「生成纪要」会自动在新独立会话中转写汇总。</div>`
+          : `<div class="muted-note">${escapeHtml(t.liveHint)}</div>`
       }
     </div>
     ${postStopCtaHtml}
     <div class="card">
       <div class="section-title">
-        <span>最近录制</span>
-        <button class="btn btn-sm btn-ghost" data-action="switch-history">全部 (${state.recentMeetings.length})</button>
+        <span>${escapeHtml(t.recentRecordingsTitle)}</span>
+        <button type="button" class="btn btn-sm btn-ghost" data-action="switch-history">${escapeHtml(t.allCountBtn(state.recentMeetings.length))}</button>
       </div>
       <div class="meeting-list">${recentHtml}</div>
     </div>
@@ -1538,8 +1751,9 @@ function renderLiveTab(): string {
 }
 
 function renderHistoryTab(): string {
+  const t = getStrings(state.lang);
   if (state.historyDetailOpen && state.selectedMeetingId) {
-    let detailHtml = `<div class="empty-state">正在加载会议详情...</div>`;
+    let detailHtml = `<div class="empty-state">${escapeHtml(t.loadingDetail)}</div>`;
     const detail = state.selectedDetail;
     if (detail && detail.summary.id === state.selectedMeetingId) {
       const s = detail.summary;
@@ -1568,20 +1782,20 @@ function renderHistoryTab(): string {
             ? `
               <div class="input-row">
                 <input id="rename-input" class="text-input" type="text" maxlength="500" value="${escapeHtml(state.renameDraft)}" />
-                <button class="btn btn-primary btn-sm" data-action="save-rename" data-id="${escapeHtml(s.id)}">保存</button>
-                <button class="btn btn-sm" data-action="cancel-rename">取消</button>
+                <button type="button" class="btn btn-primary btn-sm" data-action="save-rename" data-id="${escapeHtml(s.id)}">${escapeHtml(t.save)}</button>
+                <button type="button" class="btn btn-sm" data-action="cancel-rename">${escapeHtml(t.cancel)}</button>
               </div>
             `
             : `
               <div class="meeting-item-top">
                 <div class="item-actions">
                   <div style="font-size:15px;font-weight:600;">${escapeHtml(s.title)}</div>
-                  <span class="badge">${s.mode === "dual" ? "双轨录制" : "仅麦克风"}</span>
-                  ${isMeetingGenerating(s.id) ? `<span class="badge generating">独立会话生成中</span>` : ""}
+                  <span class="badge">${escapeHtml(s.mode === "dual" ? t.modeDualFull : t.modeMicFull)}</span>
+                  ${isMeetingGenerating(s.id) ? `<span class="badge generating">${escapeHtml(t.badgeGenerating)}</span>` : ""}
                 </div>
                 ${
                   !isRecordingThis
-                    ? `<button class="btn btn-sm" data-action="start-rename" data-id="${escapeHtml(s.id)}" data-title="${escapeHtml(s.title)}">重命名</button>`
+                    ? `<button type="button" class="btn btn-sm" data-action="start-rename" data-id="${escapeHtml(s.id)}" data-title="${escapeHtml(s.title)}">${escapeHtml(t.rename)}</button>`
                     : ""
                 }
               </div>
@@ -1590,57 +1804,57 @@ function renderHistoryTab(): string {
         <div class="meeting-meta">
           <span>ID: <code>${escapeHtml(s.id)}</code></span>
           <span>${escapeHtml(formatDate(s.createdAt))}</span>
-          <span>时长 ${formatDuration(s.totalDurationSec)}</span>
-          <span>切片 ${s.transcribedChunkCount}/${s.chunkCount}</span>
-          <span>音频 ${s.audioCleaned && s.hasCleanableAudio !== true ? "已清理" : formatBytes(s.audioBytesTotal)}</span>
+          <span>${escapeHtml(t.durationLabel(formatDuration(s.totalDurationSec)))}</span>
+          <span>${escapeHtml(t.chunksLabel(s.transcribedChunkCount, s.chunkCount))}</span>
+          <span>${escapeHtml(t.audioLabel(s.audioCleaned && s.hasCleanableAudio !== true ? t.audioCleanedLabel : formatBytes(s.audioBytesTotal)))}</span>
           ${
             stats
-              ? `<span>发言分布 我方 ${formatDuration(stats.meSec)} · 对方 ${formatDuration(stats.remoteSec)} · 重叠 ${formatDuration(stats.bothSec)}</span>`
+              ? `<span>${escapeHtml(t.speakerDistLabel(formatDuration(stats.meSec), formatDuration(stats.remoteSec), formatDuration(stats.bothSec)))}</span>`
               : ""
           }
         </div>
         ${
           s.status === "partial" || gaps.length > 0 || failedCount > 0
-            ? `<div class="banner"><div><strong>部分完成（存在声轨或切片缺口）</strong><div class="muted-note">${gaps.length > 0 ? `缺口 ${gaps.length} 处` : ""}${gaps.length > 0 && failedCount > 0 ? " · " : ""}${failedCount > 0 ? `异常切片 ${failedCount} 个` : ""}${detail.manifest?.lastError ? ` · ${escapeHtml(detail.manifest.lastError)}` : ""}</div></div></div>`
+            ? `<div class="banner"><div><strong>${escapeHtml(t.partialDetailTitle)}</strong><div class="muted-note">${gaps.length > 0 ? escapeHtml(t.partialDetailGaps(gaps.length)) : ""}${gaps.length > 0 && failedCount > 0 ? " · " : ""}${failedCount > 0 ? escapeHtml(t.partialDetailFailed(failedCount)) : ""}${detail.manifest?.lastError ? ` · ${escapeHtml(detail.manifest.lastError)}` : ""}</div></div></div>`
             : ""
         }
         <div class="item-actions">
           <div class="tab-group">
-            <button class="tab-btn ${state.detailTab === "notes" ? "active" : ""}" data-action="detail-tab" data-tab="notes">会议纪要</button>
-            <button class="tab-btn ${state.detailTab === "transcript" ? "active" : ""}" data-action="detail-tab" data-tab="transcript">逐字稿</button>
+            <button type="button" class="tab-btn ${state.detailTab === "notes" ? "active" : ""}" data-action="detail-tab" data-tab="notes">${escapeHtml(t.tabNotes)}</button>
+            <button type="button" class="tab-btn ${state.detailTab === "transcript" ? "active" : ""}" data-action="detail-tab" data-tab="transcript">${escapeHtml(t.tabTranscript)}</button>
           </div>
-          <button class="btn btn-sm" data-action="copy-active" ${!activeText ? "disabled" : ""}>复制 Markdown</button>
+          <button type="button" class="btn btn-sm" data-action="copy-active" ${!activeText ? "disabled" : ""}>${escapeHtml(t.copyMarkdown)}</button>
           ${
             ((!s.audioCleaned && s.audioBytesTotal > 0) || s.hasCleanableAudio === true) && !isRecordingThis
               ? isConfirmingClean
-                ? `<button class="btn btn-danger btn-sm" data-action="confirm-cleanup" data-id="${escapeHtml(s.id)}">确认清理 ${s.chunkCount} 组原音</button>
-                   <button class="btn btn-sm" data-action="cancel-cleanup">取消</button>`
-                : `<button class="btn btn-sm" data-action="${needsCleanupConfirm ? "ask-cleanup" : "confirm-cleanup"}" data-id="${escapeHtml(s.id)}" ${state.actionBusy ? "disabled" : ""}>清理原音频 (${formatBytes(s.audioBytesTotal)})</button>`
+                ? `<button type="button" class="btn btn-danger btn-sm" data-action="confirm-cleanup" data-id="${escapeHtml(s.id)}">${escapeHtml(t.confirmCleanupBtn(s.chunkCount))}</button>
+                   <button type="button" class="btn btn-sm" data-action="cancel-cleanup">${escapeHtml(t.cancel)}</button>`
+                : `<button type="button" class="btn btn-sm" data-action="${needsCleanupConfirm ? "ask-cleanup" : "confirm-cleanup"}" data-id="${escapeHtml(s.id)}" ${state.actionBusy ? "disabled" : ""}>${escapeHtml(t.cleanupAudioBtn(formatBytes(s.audioBytesTotal)))}</button>`
               : ""
           }
           ${
             !isRecordingThis
               ? isConfirmingDel
-                ? `<button class="btn btn-danger btn-sm" data-action="confirm-delete" data-id="${escapeHtml(s.id)}">确认删除</button>
-                   <button class="btn btn-sm" data-action="cancel-delete">取消</button>`
-                : `<button class="btn btn-sm" data-action="ask-delete" data-id="${escapeHtml(s.id)}">删除</button>`
+                ? `<button type="button" class="btn btn-danger btn-sm" data-action="confirm-delete" data-id="${escapeHtml(s.id)}">${escapeHtml(t.confirmDelete)}</button>
+                   <button type="button" class="btn btn-sm" data-action="cancel-delete">${escapeHtml(t.cancel)}</button>`
+                : `<button type="button" class="btn btn-sm" data-action="ask-delete" data-id="${escapeHtml(s.id)}">${escapeHtml(t.delete)}</button>`
               : ""
           }
           ${
             s.chunkCount > 0 && !isRecordingThis && s.status !== "empty"
-              ? `<button class="btn btn-primary btn-sm" data-action="transcribe" data-id="${escapeHtml(s.id)}" ${state.actionBusy || isMeetingGenerating(s.id) ? "disabled" : ""}>${svgIcon("notes")}${actionLabel}</button>`
+              ? `<button type="button" class="btn btn-primary btn-sm" data-action="transcribe" data-id="${escapeHtml(s.id)}" ${state.actionBusy || isMeetingGenerating(s.id) ? "disabled" : ""}>${svgIcon("notes")}${escapeHtml(actionLabel)}</button>`
               : ""
           }
         </div>
         ${
           isActiveTruncated
-            ? `<div class="banner info"><div><strong>内容过长已截断显示</strong><div class="muted-note">${
+            ? `<div class="banner info"><div><strong>${escapeHtml(t.truncatedTitle)}</strong><div class="muted-note">${escapeHtml(
                 state.detailTab === "transcript" &&
-                !s.hasTranscript &&
-                detail.transcribedChunkIds.length > 1
-                  ? "完整分片文件已保存在本机目录"
-                  : "完整文件已保存在本机"
-              }：<code>${escapeHtml(activeDiskPath)}</code></div></div></div>`
+                  !s.hasTranscript &&
+                  detail.transcribedChunkIds.length > 1
+                  ? t.truncatedChunksSaved
+                  : t.truncatedFileSaved,
+              )}: <code>${escapeHtml(activeDiskPath)}</code></div></div></div>`
             : ""
         }
       </div>
@@ -1648,13 +1862,13 @@ function renderHistoryTab(): string {
         ${
           !activeText.trim() && s.chunkCount > 0 && !isRecordingThis && s.status !== "empty"
             ? `<div class="notes-empty-cta">
-                 <strong>${state.detailTab === "notes" ? "尚未生成会议纪要" : "尚未生成逐字稿"}</strong>
-                 <div class="muted-note">本场会议已录制 ${formatDuration(s.totalDurationSec)}（${s.chunkCount} 个音频切片${s.transcribedChunkCount > 0 ? ` · 已转写 ${s.transcribedChunkCount} 片` : ""}）。</div>
-                 <button class="btn btn-primary btn-sm" data-action="transcribe" data-id="${escapeHtml(s.id)}" ${state.actionBusy || isMeetingGenerating(s.id) ? "disabled" : ""}>
-                   ${svgIcon("notes")}${actionLabel}
+                 <strong>${escapeHtml(state.detailTab === "notes" ? t.emptyNotesTitle : t.emptyTranscriptTitle)}</strong>
+                 <div class="muted-note">${escapeHtml(t.emptyDetailDesc(formatDuration(s.totalDurationSec), s.chunkCount, s.transcribedChunkCount))}</div>
+                 <button type="button" class="btn btn-primary btn-sm" data-action="transcribe" data-id="${escapeHtml(s.id)}" ${state.actionBusy || isMeetingGenerating(s.id) ? "disabled" : ""}>
+                   ${svgIcon("notes")}${escapeHtml(actionLabel)}
                  </button>
                </div>`
-            : renderMarkdown(activeText)
+            : renderMarkdown(activeText, state.lang)
         }
       </div>
     `;
@@ -1664,7 +1878,7 @@ function renderHistoryTab(): string {
       <div class="history-detail-view" data-history-detail-view="true">
         <div class="detail-nav-bar">
           <button type="button" class="btn btn-sm btn-ghost detail-back-btn" data-action="close-detail">
-            ${svgIcon("back")}返回会议列表
+            ${svgIcon("back")}${escapeHtml(t.backToMeetings)}
           </button>
         </div>
         <div class="history-detail">${detailHtml}</div>
@@ -1683,20 +1897,31 @@ function renderHistoryTab(): string {
         hasNotes: hit.hasNotes,
         hasTranscript: hit.hasTranscript,
       }))
-    : state.recentMeetings.map((m) => ({
-        id: m.id,
-        title: m.title,
-        mode: m.mode,
-        createdAt: m.createdAt,
-        totalDurationSec: m.totalDurationSec,
-        snippet: `${m.chunkCount} 片 · ${isMeetingGenerating(m.id) ? "独立会话生成中" : m.status === "partial" || m.failedChunkCount > 0 ? "部分完成" : m.hasNotes ? "已有纪要" : m.transcribedChunkCount > 0 ? `已转写 ${m.transcribedChunkCount}/${m.chunkCount}` : "未转写"}`,
-        hasNotes: m.hasNotes,
-        hasTranscript: m.hasTranscript,
-      }));
+    : state.recentMeetings.map((m) => {
+        const statusText = isMeetingGenerating(m.id)
+          ? t.snippetStatusGenerating
+          : m.status === "partial" || m.failedChunkCount > 0
+            ? t.snippetStatusPartial
+            : m.hasNotes
+              ? t.snippetStatusHasNotes
+              : m.transcribedChunkCount > 0
+                ? t.snippetStatusTranscribed(m.transcribedChunkCount, m.chunkCount)
+                : t.snippetStatusUntranscribed;
+        return {
+          id: m.id,
+          title: m.title,
+          mode: m.mode,
+          createdAt: m.createdAt,
+          totalDurationSec: m.totalDurationSec,
+          snippet: t.historySnippet(m.chunkCount, statusText),
+          hasNotes: m.hasNotes,
+          hasTranscript: m.hasTranscript,
+        };
+      });
 
   const listHtml =
     items.length === 0
-      ? `<div class="empty-state">${state.searchQuery.trim() ? "没有匹配的会议记录" : "暂无历史会议"}</div>`
+      ? `<div class="empty-state">${escapeHtml(state.searchQuery.trim() ? t.noSearchResults : t.noHistoryMeetings)}</div>`
       : items
           .map((item) => {
             const active = state.selectedMeetingId === item.id;
@@ -1705,8 +1930,8 @@ function renderHistoryTab(): string {
                 <div class="meeting-item-top">
                   <div class="meeting-title">${escapeHtml(item.title)}</div>
                   <div class="item-actions">
-                    <span class="badge">${item.mode === "dual" ? "双轨" : "仅麦"}</span>
-                    <span class="badge ${item.hasNotes ? "done" : ""}">${item.hasNotes ? "纪要" : item.hasTranscript ? "逐字稿" : "待处理"}</span>
+                    <span class="badge">${escapeHtml(item.mode === "dual" ? t.modeDualShort : t.modeMicShort)}</span>
+                    <span class="badge ${item.hasNotes ? "done" : ""}">${escapeHtml(item.hasNotes ? t.listBadgeNotes : item.hasTranscript ? t.listBadgeTranscript : t.listBadgePending)}</span>
                     <span class="meeting-chevron">${svgIcon("chevron")}</span>
                   </div>
                 </div>
@@ -1724,17 +1949,17 @@ function renderHistoryTab(): string {
     <div class="history-list-view" data-history-list-view="true">
       <div class="retention-bar" data-retention-bar="true">
         <div class="retention-bar-left">
-          <strong>原音频留存策略</strong>
-          <span class="muted-note">仅清理原始 .m4a，保留纪要、逐字稿与发言统计；未转写音频绝不自动删除。</span>
+          <strong>${escapeHtml(t.retentionTitle)}</strong>
+          <span class="muted-note">${escapeHtml(t.retentionDesc)}</span>
         </div>
         <select id="retention-policy-select" class="select-input" ${state.actionBusy ? "disabled" : ""}>
-          <option value="manual" ${state.audioRetentionPolicy === "manual" ? "selected" : ""}>永久保留（手动清理）</option>
-          <option value="after_notes" ${state.audioRetentionPolicy === "after_notes" ? "selected" : ""}>生成纪要后自动清理</option>
-          <option value="days_7" ${state.audioRetentionPolicy === "days_7" ? "selected" : ""}>保留 7 天（仅清理已完成纪要）</option>
+          <option value="manual" ${state.audioRetentionPolicy === "manual" ? "selected" : ""}>${escapeHtml(t.retentionManual)}</option>
+          <option value="after_notes" ${state.audioRetentionPolicy === "after_notes" ? "selected" : ""}>${escapeHtml(t.retentionAfterNotes)}</option>
+          <option value="days_7" ${state.audioRetentionPolicy === "days_7" ? "selected" : ""}>${escapeHtml(t.retentionDays7)}</option>
         </select>
       </div>
       <div class="history-sidebar">
-        <input id="search-input" class="text-input" type="search" placeholder="搜索标题、纪要或逐字稿..." value="${escapeHtml(state.searchQuery)}" />
+        <input id="search-input" class="text-input" type="search" placeholder="${escapeHtml(t.searchPlaceholder)}" value="${escapeHtml(state.searchQuery)}" />
         <div class="meeting-list">${listHtml}</div>
       </div>
     </div>
@@ -1744,6 +1969,7 @@ function renderHistoryTab(): string {
 function render() {
   const root = document.getElementById("root");
   if (!root) return;
+  const t = getStrings(state.lang);
 
   const activeEl = document.activeElement as HTMLInputElement | null;
   const activeId = activeEl?.id ?? null;
@@ -1761,46 +1987,56 @@ function render() {
           : "";
   const pillLabel =
     recState === "recording"
-      ? `录制中 ${formatDuration(state.snapshot?.elapsedSec ?? 0)}`
+      ? t.statusRecording(formatDuration(state.snapshot?.elapsedSec ?? 0))
       : recState === "finalizing"
-        ? "封包中"
+        ? t.statusFinalizing
         : recState === "starting"
-          ? "启动中"
-          : state.daemonRunning
-            ? "就绪"
-            : "待连接";
+          ? t.statusStarting
+          : state.runtimeStatus && !state.runtimeStatus.supported
+            ? t.statusMacOnly
+            : state.runtimeStatus && !state.runtimeStatus.appReady
+              ? t.statusNotInitialized
+              : state.daemonRunning
+                ? t.statusReady
+                : t.statusConnecting;
 
   root.innerHTML = `
     <div class="app-shell">
       <header class="top-bar">
         <div class="tab-group">
-          <button class="tab-btn ${state.tab === "live" ? "active" : ""}" data-action="switch-live">录制</button>
-          <button class="tab-btn ${state.tab === "history" ? "active" : ""}" data-action="switch-history">历史 (${state.recentMeetings.length})</button>
+          <button type="button" class="tab-btn ${state.tab === "live" ? "active" : ""}" data-action="switch-live">${escapeHtml(t.tabRecord)}</button>
+          <button type="button" class="tab-btn ${state.tab === "history" ? "active" : ""}" data-action="switch-history">${escapeHtml(t.tabHistoryCount(state.recentMeetings.length))}</button>
         </div>
-        <span class="status-pill ${pillClass}"><span class="status-dot"></span>${escapeHtml(pillLabel)}</span>
+        <div class="top-bar-right">
+          <div class="lang-toggle" role="group" aria-label="${escapeHtml(t.langToggleAria)}">
+            <button type="button" class="lang-btn ${state.lang === "en" ? "active" : ""}" data-action="set-lang" data-lang="en">EN</button>
+            <button type="button" class="lang-btn ${state.lang === "zh" ? "active" : ""}" data-action="set-lang" data-lang="zh">中</button>
+          </div>
+          <span class="status-pill ${pillClass}"><span class="status-dot"></span>${escapeHtml(pillLabel)}</span>
+        </div>
       </header>
       <main class="content-area">
         ${
           state.bannerError
-            ? `<div class="banner error"><span>${escapeHtml(state.bannerError)}</span><button class="btn btn-sm" data-action="dismiss-error">关闭</button></div>`
+            ? `<div class="banner error"><span>${escapeHtml(state.bannerError)}</span><button type="button" class="btn btn-sm" data-action="dismiss-error">${escapeHtml(t.close)}</button></div>`
             : ""
         }
         ${
           state.copiedPromptBox
             ? `<div class="banner info">
                  <div style="flex:1;min-width:0;">
-                   <strong>已复制「生成会议纪要」指令</strong>
-                   <div class="muted-note">${escapeHtml(state.copiedPromptBox.reason ?? `会议 ID：${state.copiedPromptBox.meetingId}`)}</div>
+                   <strong>${escapeHtml(t.copiedPromptTitle)}</strong>
+                   <div class="muted-note">${escapeHtml(state.copiedPromptBox.reason ?? `ID: ${state.copiedPromptBox.meetingId}`)}</div>
                    <textarea class="prompt-preview" readonly rows="2">${escapeHtml(state.copiedPromptBox.prompt)}</textarea>
                  </div>
                  <div class="item-actions">
-                   <button class="btn btn-primary btn-sm" data-action="copy-prompt-box">再次复制</button>
+                   <button type="button" class="btn btn-primary btn-sm" data-action="copy-prompt-box">${escapeHtml(t.copyAgain)}</button>
                    ${
                      state.copiedPromptBox.allowCurrentChatFallback
-                       ? `<button class="btn btn-sm" data-action="transcribe-current" data-id="${escapeHtml(state.copiedPromptBox.meetingId)}" ${state.actionBusy ? "disabled" : ""}>改在当前对话生成</button>`
+                       ? `<button type="button" class="btn btn-sm" data-action="transcribe-current" data-id="${escapeHtml(state.copiedPromptBox.meetingId)}" ${state.actionBusy ? "disabled" : ""}>${escapeHtml(t.generateInCurrentChat)}</button>`
                        : ""
                    }
-                   <button class="btn btn-sm btn-ghost" data-action="dismiss-prompt-box">关闭</button>
+                   <button type="button" class="btn btn-sm btn-ghost" data-action="dismiss-prompt-box">${escapeHtml(t.close)}</button>
                  </div>
                </div>`
             : ""
@@ -1880,14 +2116,24 @@ document.addEventListener("click", (event) => {
   const id = target.dataset.id;
 
   switch (action) {
+    case "set-lang":
+      void handleSetLanguage(target.dataset.lang === "zh" ? "zh" : "en");
+      break;
+    case "setup-runtime":
+      void handleSetupRuntime();
+      break;
     case "switch-live":
       state.tab = "live";
+      state.confirmDeleteId = null;
+      state.confirmCleanupId = null;
       render();
       void pollLiveOnce({ autoLaunch: !state.daemonRunning, forceRender: true });
       break;
     case "switch-history":
       state.tab = "history";
       state.historyDetailOpen = false;
+      state.confirmDeleteId = null;
+      state.confirmCleanupId = null;
       render();
       break;
     case "dismiss-error":
@@ -2049,9 +2295,29 @@ app.ontoolresult = (result) => {
   const data = (result.structuredContent ?? {}) as {
     requestedView?: string | null;
     requestedMeetingId?: string | null;
+    runtimeStatus?: RuntimeStatus;
+    settings?: {
+      audioRetentionPolicy?: "manual" | "after_notes" | "days_7";
+      uiLanguage?: UiLang;
+    };
     snapshot?: RecorderSnapshot | null;
     recentMeetings?: MeetingSummary[];
   };
+  if (data.runtimeStatus) state.runtimeStatus = data.runtimeStatus;
+  if (
+    !state.langInitializedFromServer &&
+    (data.settings?.uiLanguage === "en" || data.settings?.uiLanguage === "zh")
+  ) {
+    state.lang = data.settings.uiLanguage;
+    state.langInitializedFromServer = true;
+  }
+  if (
+    data.settings?.audioRetentionPolicy === "manual" ||
+    data.settings?.audioRetentionPolicy === "after_notes" ||
+    data.settings?.audioRetentionPolicy === "days_7"
+  ) {
+    state.audioRetentionPolicy = data.settings.audioRetentionPolicy;
+  }
   if (data.snapshot) state.snapshot = data.snapshot;
   if (Array.isArray(data.recentMeetings)) state.recentMeetings = data.recentMeetings;
   if (data.requestedMeetingId) {
@@ -2079,7 +2345,8 @@ async function boot() {
     state.hasOpenLinksCap = Boolean(caps?.openLinks);
     applyHostContext(app.getHostContext());
   } catch (err) {
-    state.bannerError = `连接宿主视图失败：${err instanceof Error ? err.message : String(err)}`;
+    const msg = err instanceof Error ? err.message : String(err);
+    state.bannerError = getStrings(state.lang).hostConnectFailed(msg);
   }
   await pollLiveOnce({ autoLaunch: state.tab === "live", forceRender: true });
 

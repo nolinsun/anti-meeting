@@ -1,15 +1,18 @@
 {
-  "name": "anti-meeting",
-  "displayName": "anti-meeting",
-  "version": "0.3.1",
-  "description": "仅支持 macOS 的本地会议录制与纪要生成插件（anti-meeting）：支持右侧边栏后台双轨/仅麦克风录制（兼容 Zoom/飞书/腾讯会议/浏览器等）、不打断 Antigravity 会话切换、合盖休眠优雅封包、独立会话一键生成结构化逐字稿与会议纪要。",
+  "name": "meeting-notes",
+  "displayName": "Meeting Notes",
+  "version": "0.4.0",
+  "description": "Local macOS meeting recorder and structured Markdown notes plugin: dual-track system audio + microphone capture (Zoom, Meet, Teams, Feishu, browsers), background recording across sessions, one-click local Swift setup, bilingual EN/中文 UI, and resumable AI transcription.",
   "logo": "assets/logo.svg",
-  "author": "nolinsun",
+  "author": {
+    "name": "nolinsun",
+    "url": "https://github.com/nolinsun"
+  },
   "homepage": "https://github.com/nolinsun/anti-meeting",
   "repository": "https://github.com/nolinsun/anti-meeting",
   "suggestedPrompts": [
-    "打开 anti-meeting 侧边栏并开始录制语音",
-    "整理最近一场会议并生成结构化纪要和待办事项",
-    "搜索历史会议中关于预算或接口方案的讨论"
+    "Open the Meeting Notes side pane and start recording a meeting",
+    "Transcribe my most recent meeting and generate structured notes with action items",
+    "Search past meeting notes and transcripts for budget or architecture decisions"
   ]
 }

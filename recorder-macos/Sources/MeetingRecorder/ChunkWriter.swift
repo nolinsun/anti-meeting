@@ -90,7 +90,7 @@ final class ChunkWriter: @unchecked Sendable {
     private let onChunkFailed: @Sendable (String) -> Void
     private let testFault: FaultInjection?
 
-    private let writerQueue = DispatchQueue(label: "com.antigravity.meeting.chunkwriter")
+    private let writerQueue = DispatchQueue(label: "io.github.nolinsun.meeting.chunkwriter")
     private let finishGroup = DispatchGroup()
 
     private let pcmFormat: AVAudioFormat

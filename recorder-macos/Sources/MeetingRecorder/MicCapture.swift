@@ -513,8 +513,8 @@ final class MicCapture: @unchecked Sendable {
     private let onDeviceChanged: @Sendable (String?) -> Void
     private let onFirstHostTime: @Sendable (UInt64) -> Void
 
-    private let lifecycleQueue = DispatchQueue(label: "com.antigravity.meeting.mic.lifecycle")
-    private let processingQueue = DispatchQueue(label: "com.antigravity.meeting.mic.processing")
+    private let lifecycleQueue = DispatchQueue(label: "io.github.nolinsun.meeting.mic.lifecycle")
+    private let processingQueue = DispatchQueue(label: "io.github.nolinsun.meeting.mic.processing")
     private let stateLock = NSLock()
 
     private var engine: AVAudioEngine?

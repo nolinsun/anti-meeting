@@ -1,11 +1,8 @@
 {
   "name": "anti-meeting",
-  "version": "0.3.1",
-  "description": "macOS-only local meeting recorder and Markdown notes plugin for Antigravity",
+  "version": "0.4.0",
+  "description": "Local macOS-only meeting recorder (with cross-platform history browsing) and Markdown notes plugin for Antigravity",
   "license": "MIT",
-  "os": [
-    "darwin"
-  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/nolinsun/anti-meeting.git"
@@ -14,12 +11,15 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build:server": "esbuild mcp-server/src/index.ts --bundle --platform=node --target=node22 --format=esm --outfile=plugin/bin/meeting-mcp-server.mjs --banner:js=\"import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);\"",
+    "test": "node ui/scripts/test-markdown.mjs && node mcp-server/scripts/test-native-fallback.mjs",
     "build:ui": "node ui/scripts/build-ui.mjs",
+    "build:server": "esbuild mcp-server/src/index.ts --bundle --platform=node --target=node22 --format=esm --outfile=plugin/scripts/meeting-mcp-server.mjs --banner:js=\"import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);\" && chmod +x plugin/scripts/meeting-mcp-server.mjs",
+    "sync:sources": "node scripts/sync-plugin-sources.mjs",
+    "build:plugin": "npm run build:ui && npm run build:server && npm run sync:sources",
     "build:native": "bash mcp-server/native/build-openat.sh",
     "build:swift": "bash recorder-macos/scripts/bundle-app.sh",
     "install:plugin": "bash scripts/install-plugin.sh",
-    "build": "npm run build:ui && npm run build:native && npm run build:server && npm run build:swift"
+    "build": "npm run build:plugin && npm run build:native && npm run build:swift"
   },
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "^1.0.0",

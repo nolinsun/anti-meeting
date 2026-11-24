@@ -48,11 +48,13 @@ const COMPACT_TEXT_THRESHOLD_BYTES = 32_768;
 const MAX_MEETING_TITLE_CHARS = 500;
 const REVISION_HASH_MAX_BYTES = 256 * 1024;
 
-const OPEN_SAFE_READ_FLAGS =
-  safeOpenat.O_RDONLY | safeOpenat.O_NOFOLLOW | safeOpenat.O_NONBLOCK | safeOpenat.O_CLOEXEC;
+function openSafeReadFlags(): number {
+  return safeOpenat.O_RDONLY | safeOpenat.O_NOFOLLOW | safeOpenat.O_NONBLOCK | safeOpenat.O_CLOEXEC;
+}
 
-const OPEN_SAFE_DIR_FLAGS =
-  safeOpenat.O_RDONLY | safeOpenat.O_NOFOLLOW | safeOpenat.O_DIRECTORY | safeOpenat.O_CLOEXEC;
+function openSafeDirFlags(): number {
+  return safeOpenat.O_RDONLY | safeOpenat.O_NOFOLLOW | safeOpenat.O_DIRECTORY | safeOpenat.O_CLOEXEC;
+}
 
 const OPEN_SAFE_WRITE_FLAGS =
   fs.constants.O_WRONLY |
@@ -174,9 +176,11 @@ export interface SearchHit {
 }
 
 export type AudioRetentionPolicy = "manual" | "after_notes" | "days_7";
+export type UiLanguage = "en" | "zh";
 
 export interface PluginSettings {
   audioRetentionPolicy: AudioRetentionPolicy;
+  uiLanguage: UiLanguage;
 }
 
 export interface NotesJobRecord {
@@ -193,6 +197,11 @@ const VALID_RETENTION_POLICIES = new Set<AudioRetentionPolicy>([
   "after_notes",
   "days_7",
 ]);
+const VALID_UI_LANGUAGES = new Set<UiLanguage>(["en", "zh"]);
+const DEFAULT_PLUGIN_SETTINGS: PluginSettings = {
+  audioRetentionPolicy: "manual",
+  uiLanguage: "en",
+};
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const NOTES_JOB_IDLE_TTL_MS = 15 * 60_000;
 
@@ -430,7 +439,7 @@ function readRegularFileBytesIfExists(
   const cap = Math.max(0, Math.floor(maxBytes));
   let fd = -1;
   try {
-    fd = fs.openSync(targetPath, OPEN_SAFE_READ_FLAGS);
+    fd = fs.openSync(targetPath, openSafeReadFlags());
     const st = fs.fstatSync(fd);
     if (!st.isFile() || st.size > cap) {
       return null;
@@ -676,34 +685,48 @@ export class MeetingStore {
     if (this.enforceDataDirNotSymlink) {
       const dataLst = lstatIfExists(this.dataDir);
       if (!dataLst || dataLst.isSymbolicLink() || !dataLst.isDirectory()) {
-        return { audioRetentionPolicy: "manual" };
+        return { ...DEFAULT_PLUGIN_SETTINGS };
       }
     }
     const filePath = this.settingsPath();
     const lst = lstatIfExists(filePath);
     if (!lst || lst.isSymbolicLink() || !lst.isFile()) {
-      return { audioRetentionPolicy: "manual" };
+      return { ...DEFAULT_PLUGIN_SETTINGS };
     }
     try {
       const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as {
         audioRetentionPolicy?: unknown;
+        uiLanguage?: unknown;
       };
-      if (
+      const audioRetentionPolicy =
         parsed &&
         typeof parsed.audioRetentionPolicy === "string" &&
         VALID_RETENTION_POLICIES.has(parsed.audioRetentionPolicy as AudioRetentionPolicy)
-      ) {
-        return { audioRetentionPolicy: parsed.audioRetentionPolicy as AudioRetentionPolicy };
-      }
+          ? (parsed.audioRetentionPolicy as AudioRetentionPolicy)
+          : DEFAULT_PLUGIN_SETTINGS.audioRetentionPolicy;
+      const uiLanguage =
+        parsed &&
+        typeof parsed.uiLanguage === "string" &&
+        VALID_UI_LANGUAGES.has(parsed.uiLanguage as UiLanguage)
+          ? (parsed.uiLanguage as UiLanguage)
+          : DEFAULT_PLUGIN_SETTINGS.uiLanguage;
+      return { audioRetentionPolicy, uiLanguage };
     } catch {
-      // Corrupt or unreadable settings safely fall back to manual retention.
+      // Corrupt or unreadable settings safely fall back to defaults.
     }
-    return { audioRetentionPolicy: "manual" };
+    return { ...DEFAULT_PLUGIN_SETTINGS };
   }
 
-  setSettings(next: { audioRetentionPolicy: AudioRetentionPolicy }): PluginSettings {
-    if (!VALID_RETENTION_POLICIES.has(next.audioRetentionPolicy)) {
-      throw new Error(`非法原音频留存策略: ${String(next.audioRetentionPolicy)}`);
+  setSettings(next: Partial<PluginSettings>): PluginSettings {
+    const current = this.getSettings();
+    const audioRetentionPolicy =
+      next.audioRetentionPolicy !== undefined ? next.audioRetentionPolicy : current.audioRetentionPolicy;
+    const uiLanguage = next.uiLanguage !== undefined ? next.uiLanguage : current.uiLanguage;
+    if (!VALID_RETENTION_POLICIES.has(audioRetentionPolicy)) {
+      throw new Error(`非法原音频留存策略: ${String(audioRetentionPolicy)}`);
+    }
+    if (!VALID_UI_LANGUAGES.has(uiLanguage)) {
+      throw new Error(`Invalid UI language: ${String(uiLanguage)}`);
     }
     this.assertDataDirSafe(true);
     const targetPath = this.settingsPath();
@@ -711,7 +734,7 @@ export class MeetingStore {
     if (targetLst && (targetLst.isSymbolicLink() || !targetLst.isFile())) {
       throw new Error(`拒绝写入符号链接或非普通设置文件: ${targetPath}`);
     }
-    const saved: PluginSettings = { audioRetentionPolicy: next.audioRetentionPolicy };
+    const saved: PluginSettings = { audioRetentionPolicy, uiLanguage };
     const tmpPath = path.join(this.dataDir, `.settings.json.${crypto.randomUUID()}.tmp`);
     try {
       fs.writeFileSync(tmpPath, `${JSON.stringify(saved, null, 2)}\n`, {
@@ -739,7 +762,7 @@ export class MeetingStore {
     let dirFd = -1;
     let locked = false;
     try {
-      dirFd = fs.openSync(this.dataDir, OPEN_SAFE_DIR_FLAGS);
+      dirFd = safeOpenat.openDir(this.dataDir, openSafeDirFlags());
       safeOpenat.flock(dirFd, safeOpenat.LOCK_EX);
       locked = true;
       return fn();
@@ -1189,7 +1212,7 @@ export class MeetingStore {
     if (lstBefore.isSymbolicLink() || !lstBefore.isDirectory()) {
       throw new Error(`会议数据根目录非法（不允许符号链接）: ${this.meetingsDir}`);
     }
-    const fd = fs.openSync(realRoot, OPEN_SAFE_DIR_FLAGS);
+    const fd = safeOpenat.openDir(realRoot, openSafeDirFlags());
     try {
       const fdStat = fs.fstatSync(fd);
       const lstAfter = fs.lstatSync(this.meetingsDir);
@@ -1225,7 +1248,7 @@ export class MeetingStore {
     try {
       rootFd = this.openRootFd();
       try {
-        meetingFd = safeOpenat.openat(rootFd, meetingId, OPEN_SAFE_DIR_FLAGS);
+        meetingFd = safeOpenat.openat(rootFd, meetingId, openSafeDirFlags());
       } catch (err) {
         const code = (err as NodeJS.ErrnoException | undefined)?.code;
         if (code === "ENOENT") {
@@ -1315,7 +1338,7 @@ export class MeetingStore {
       }
 
       try {
-        meetingFd = safeOpenat.openat(rootFd, meetingId, OPEN_SAFE_DIR_FLAGS);
+        meetingFd = safeOpenat.openat(rootFd, meetingId, openSafeDirFlags());
       } catch (err) {
         const code = (err as NodeJS.ErrnoException | undefined)?.code;
         if (code === "ENOENT") return { kind: "missing" };
@@ -1328,7 +1351,7 @@ export class MeetingStore {
       let parentFd = meetingFd;
       if (subdir !== null) {
         try {
-          subFd = safeOpenat.openat(meetingFd, subdir, OPEN_SAFE_DIR_FLAGS);
+          subFd = safeOpenat.openat(meetingFd, subdir, openSafeDirFlags());
         } catch (err) {
           const code = (err as NodeJS.ErrnoException | undefined)?.code;
           if (code === "ENOENT") return { kind: "missing" };
@@ -1341,7 +1364,7 @@ export class MeetingStore {
       }
 
       try {
-        fileFd = safeOpenat.openat(parentFd, fileName, OPEN_SAFE_READ_FLAGS);
+        fileFd = safeOpenat.openat(parentFd, fileName, openSafeReadFlags());
       } catch (err) {
         const code = (err as NodeJS.ErrnoException | undefined)?.code;
         if (code === "ENOENT") return { kind: "missing" };
@@ -1545,9 +1568,9 @@ export class MeetingStore {
     let subFd = -1;
     try {
       rootFd = this.openRootFd();
-      meetingFd = safeOpenat.openat(rootFd, meetingId, OPEN_SAFE_DIR_FLAGS);
+      meetingFd = safeOpenat.openat(rootFd, meetingId, openSafeDirFlags());
       try {
-        subFd = safeOpenat.openat(meetingFd, subdirName, OPEN_SAFE_DIR_FLAGS);
+        subFd = safeOpenat.openat(meetingFd, subdirName, openSafeDirFlags());
       } catch (err) {
         const code = (err as NodeJS.ErrnoException | undefined)?.code;
         if (code === "ENOENT") {

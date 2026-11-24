@@ -13,8 +13,8 @@ final class UnixSocketServer: @unchecked Sendable {
     private var ownsSocket = false
     private var socketInode: ino_t = 0
 
-    private let acceptQueue = DispatchQueue(label: "com.antigravity.meeting.socket.accept")
-    private let clientQueue = DispatchQueue(label: "com.antigravity.meeting.socket.clients", attributes: .concurrent)
+    private let acceptQueue = DispatchQueue(label: "io.github.nolinsun.meeting.socket.accept")
+    private let clientQueue = DispatchQueue(label: "io.github.nolinsun.meeting.socket.clients", attributes: .concurrent)
     private let clientConcurrencyGate = DispatchSemaphore(value: 16)
 
     private static let currentBinaryId: String? = {
@@ -214,7 +214,7 @@ final class UnixSocketServer: @unchecked Sendable {
             let health = HealthResponse(
                 ok: true,
                 protocolVersion: 1,
-                appVersion: "0.3.0",
+                appVersion: "0.4.0",
                 pid: ProcessInfo.processInfo.processIdentifier,
                 dataDir: coordinator.dataDir.path,
                 state: snap.state,

@@ -3,7 +3,7 @@
     "recorder": {
       "command": "node",
       "args": [
-        "${PLUGIN_ROOT}/bin/meeting-mcp-server.mjs",
+        "${PLUGIN_ROOT}/scripts/meeting-mcp-server.mjs",
         "--data-dir=${PLUGIN_DATA}",
         "--plugin-root=${PLUGIN_ROOT}"
       ]

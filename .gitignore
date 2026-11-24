@@ -3,8 +3,10 @@ node_modules/
 recorder-macos/.build/
 npm-debug.log*
 
-# Generated plugin artifacts (rebuilt locally via `npm run build` / `npm run install:plugin`)
+# Generated plugin artifacts (rebuilt locally via `npm run build` / `npm run build:plugin`)
 plugin/bin/
+plugin/scripts/
+plugin/sources/
 plugin/ui/app.html
 
 # OS & temporary files

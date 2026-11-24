@@ -166,10 +166,10 @@ final class SystemAudioCapture: @unchecked Sendable {
     private let sessionEpoch: UInt64?
     private let hasOtherAudioOutput: @Sendable () -> Bool
 
-    private let lifecycleQueue = DispatchQueue(label: "com.antigravity.meeting.sysaudio.lifecycle")
-    private let ioQueue = DispatchQueue(label: "com.antigravity.meeting.sysaudio.io", qos: .userInitiated)
-    private let processingQueue = DispatchQueue(label: "com.antigravity.meeting.sysaudio.processing")
-    private let listenerQueue = DispatchQueue(label: "com.antigravity.meeting.sysaudio.listener")
+    private let lifecycleQueue = DispatchQueue(label: "io.github.nolinsun.meeting.sysaudio.lifecycle")
+    private let ioQueue = DispatchQueue(label: "io.github.nolinsun.meeting.sysaudio.io", qos: .userInitiated)
+    private let processingQueue = DispatchQueue(label: "io.github.nolinsun.meeting.sysaudio.processing")
+    private let listenerQueue = DispatchQueue(label: "io.github.nolinsun.meeting.sysaudio.listener")
     private let queueLock = NSLock()
     private let statusPublishLock = NSLock()
 
@@ -385,7 +385,7 @@ final class SystemAudioCapture: @unchecked Sendable {
         }
 
         let tapDescription = CATapDescription(monoGlobalTapButExcludeProcesses: excludeProcessObjects)
-        tapDescription.name = "AntigravityMeetingSystemTap"
+        tapDescription.name = "MeetingNotesSystemTap"
         tapDescription.isPrivate = true
         tapDescription.isExclusive = true
         tapDescription.muteBehavior = .unmuted
@@ -1241,8 +1241,8 @@ final class SystemAudioCapture: @unchecked Sendable {
             kAudioSubTapDriftCompensationKey: true,
         ]
         let tapOnlyConfig: [String: Any] = [
-            kAudioAggregateDeviceNameKey: "AntigravityMeetingSystemAggregate",
-            kAudioAggregateDeviceUIDKey: "com.antigravity.meeting.agg.\(UUID().uuidString)",
+            kAudioAggregateDeviceNameKey: "MeetingNotesSystemAggregate",
+            kAudioAggregateDeviceUIDKey: "io.github.nolinsun.meeting.agg.\(UUID().uuidString)",
             kAudioAggregateDeviceTapListKey: [subTapConfig],
             kAudioAggregateDeviceTapAutoStartKey: false,
             kAudioAggregateDeviceIsPrivateKey: true,

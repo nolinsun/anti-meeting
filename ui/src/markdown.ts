@@ -9,12 +9,23 @@ export function escapeHtml(text: string): string {
 
 type AlertType = "note" | "tip" | "important" | "warning" | "caution";
 
-const ALERT_DEFAULTS: Record<AlertType, string> = {
-  note: "备注",
-  tip: "建议",
-  important: "重要",
-  warning: "注意",
-  caution: "警示",
+export type MarkdownLang = "en" | "zh";
+
+const ALERT_DEFAULTS: Record<MarkdownLang, Record<AlertType, string>> = {
+  en: {
+    note: "Note",
+    tip: "Tip",
+    important: "Important",
+    warning: "Warning",
+    caution: "Caution",
+  },
+  zh: {
+    note: "备注",
+    tip: "建议",
+    important: "重要",
+    warning: "注意",
+    caution: "警示",
+  },
 };
 
 function alertIconSvg(type: AlertType): string {
@@ -447,7 +458,7 @@ function parseList(
   return { html: `<ul${classAttr}>${items.join("")}</ul>`, nextIndex: i };
 }
 
-function renderBlocks(lines: string[]): string {
+function renderBlocks(lines: string[], lang: MarkdownLang): string {
   const html: string[] = [];
   let i = 0;
 
@@ -515,15 +526,17 @@ function renderBlocks(lines: string[]): string {
       if (alertMatch) {
         const alertType = alertMatch[1].toLowerCase() as AlertType;
         const customTitle = alertMatch[2]?.trim() ?? "";
-        const titleHtml = customTitle ? formatInline(customTitle) : ALERT_DEFAULTS[alertType];
+        const titleHtml = customTitle
+          ? formatInline(customTitle)
+          : ALERT_DEFAULTS[lang][alertType];
         const bodyLines = innerLines.slice(1);
-        const bodyHtml = bodyLines.some((l) => l.trim() !== "") ? renderBlocks(bodyLines) : "";
+        const bodyHtml = bodyLines.some((l) => l.trim() !== "") ? renderBlocks(bodyLines, lang) : "";
         const bodySection = bodyHtml ? `<div class="md-alert-body">${bodyHtml}</div>` : "";
         html.push(
           `<div class="md-alert md-alert-${alertType}" role="note"><div class="md-alert-title">${alertIconSvg(alertType)}<span>${titleHtml}</span></div>${bodySection}</div>`,
         );
       } else {
-        html.push(`<blockquote>${renderBlocks(innerLines)}</blockquote>`);
+        html.push(`<blockquote>${renderBlocks(innerLines, lang)}</blockquote>`);
       }
       continue;
     }
@@ -591,11 +604,12 @@ function renderBlocks(lines: string[]): string {
   return html.join("\n");
 }
 
-export function renderMarkdown(md: string): string {
+export function renderMarkdown(md: string, lang: MarkdownLang = "en"): string {
   const safeMd = md.replace(/\u0000/g, "");
   if (!safeMd.trim()) {
-    return `<div class="empty-state">暂无内容</div>`;
+    const emptyText = lang === "zh" ? "暂无内容" : "No content yet";
+    return `<div class="empty-state">${emptyText}</div>`;
   }
   const lines = safeMd.split(/\r?\n/);
-  return renderBlocks(lines);
+  return renderBlocks(lines, lang);
 }

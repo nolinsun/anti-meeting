@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "MeetingRecorder",
-    platforms: [.macOS(.v26)],
+    platforms: [.macOS("14.2")],
     products: [
         .executable(name: "MeetingRecorder", targets: ["MeetingRecorder"]),
     ],
