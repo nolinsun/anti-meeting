@@ -148,9 +148,6 @@ async function resolveSigningIdentity(): Promise<string> {
     if (stdout.includes('"Local Meeting Recorder"')) {
       return "Local Meeting Recorder";
     }
-    if (stdout.includes('"Antigravity Meeting Local"')) {
-      return "Antigravity Meeting Local";
-    }
   } catch {
     // Fallback to ad-hoc signing.
   }

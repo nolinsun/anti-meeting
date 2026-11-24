@@ -1,11 +1,11 @@
 {
-  "name": "anti-meeting",
+  "name": "meeting-notes",
   "version": "0.4.0",
   "description": "Local macOS-only meeting recorder (with cross-platform history browsing) and Markdown notes plugin for Antigravity",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/nolinsun/anti-meeting.git"
+    "url": "https://github.com/nolinsun/meeting-notes.git"
   },
   "private": true,
   "type": "module",

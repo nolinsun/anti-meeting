@@ -4,8 +4,8 @@ private struct UInt64Box: Decodable {
     let v: UInt64
 }
 
-@_cdecl("antigravity_swift_decode_uint64")
-public func antigravitySwiftDecodeUInt64(
+@_cdecl("meeting_swift_decode_uint64")
+public func meetingSwiftDecodeUInt64(
     _ tokenPtr: UnsafePointer<CChar>?,
     _ tokenLen: Int,
     _ outValue: UnsafeMutablePointer<UInt64>?

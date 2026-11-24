@@ -55,8 +55,8 @@ if [[ -z "$DEST_PLUGIN" || "$DEST_PLUGIN" == "/" || "$DEST_PARENT_RAW" == "/" ]]
   exit 2
 fi
 
-if [[ "$DEST_BASE" != "meeting-notes" && "$DEST_BASE" != "anti-meeting" ]]; then
-  echo "Error: destination directory basename must be 'meeting-notes' or 'anti-meeting', got '$DEST_BASE'" >&2
+if [[ ! "$DEST_BASE" =~ ^[a-z0-9][a-z0-9._-]*$ ]]; then
+  echo "Error: invalid plugin directory basename '$DEST_BASE'" >&2
   exit 2
 fi
 

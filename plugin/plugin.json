@@ -8,8 +8,8 @@
     "name": "nolinsun",
     "url": "https://github.com/nolinsun"
   },
-  "homepage": "https://github.com/nolinsun/anti-meeting",
-  "repository": "https://github.com/nolinsun/anti-meeting",
+  "homepage": "https://github.com/nolinsun/meeting-notes",
+  "repository": "https://github.com/nolinsun/meeting-notes",
   "suggestedPrompts": [
     "Open the Meeting Notes side pane and start recording a meeting",
     "Transcribe my most recent meeting and generate structured notes with action items",

@@ -1,4 +1,4 @@
-# Meeting Notes (`anti-meeting`)
+# Meeting Notes
 
 [简体中文](README.md) | **English**
 
@@ -45,8 +45,8 @@
 > Run in a **macOS 14.2+** terminal to install locally (default plugin dir `~/.gemini/config/plugins/meeting-notes`, manifest `name: "meeting-notes"`, `displayName: "Meeting Notes"`):
 
 ```bash
-git clone https://github.com/nolinsun/anti-meeting.git
-cd anti-meeting
+git clone https://github.com/nolinsun/meeting-notes.git
+cd meeting-notes
 npm install
 
 # Optional (recommended): create local codesign cert "Local Meeting Recorder"
@@ -85,7 +85,7 @@ Before recording for the first time, grant access to `MeetingRecorder` in **Syst
 ## Project Structure
 
 ```text
-anti-meeting/
+meeting-notes/
 ├── recorder-macos/            # macOS Swift audio capture daemon sources (macOS 14.2+)
 │   ├── Package.swift          # Swift Package manifest (.macOS("14.2"))
 │   ├── Sources/MeetingRecorder/
@@ -137,5 +137,5 @@ agy plugin validate ./plugin --strict
 
 ## Privacy & License
 
-- **Local Data Directory**: Inside Antigravity, recordings, timelines, transcripts, and notes are stored locally under `${PLUGIN_DATA}` (e.g. `~/.gemini/antigravity/plugin_data/meeting-notes/` for fresh installs, `~/.gemini/antigravity/plugin_data/anti-meeting/` for in-place legacy upgrades via `--dest ~/.gemini/config/plugins/anti-meeting`, or `~/Library/Application Support/MeetingNotes/` when running standalone without `--data-dir`).
+- **Local Data Directory**: Inside Antigravity, recordings, timelines, transcripts, and notes are stored locally under `${PLUGIN_DATA}` (default `~/.gemini/antigravity/plugin_data/meeting-notes/`, or `~/Library/Application Support/MeetingNotes/` when running standalone without `--data-dir`).
 - **License**: Released under the [MIT License](LICENSE).

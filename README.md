@@ -1,4 +1,4 @@
-# Meeting Notes (`anti-meeting`)
+# Meeting Notes
 
 **简体中文** | [English](README.en.md)
 
@@ -45,8 +45,8 @@
 > 在 **macOS 14.2+** 终端中执行以下命令安装插件（插件目录默认为 `~/.gemini/config/plugins/meeting-notes`，Manifest `name` 为 `meeting-notes`，显示名 `Meeting Notes`）：
 
 ```bash
-git clone https://github.com/nolinsun/anti-meeting.git
-cd anti-meeting
+git clone https://github.com/nolinsun/meeting-notes.git
+cd meeting-notes
 npm install
 
 # 可选（推荐）：创建本机代码签名证书 "Local Meeting Recorder"
@@ -82,7 +82,7 @@ bash scripts/install-plugin.sh --option-b
 ## 项目结构
 
 ```text
-anti-meeting/
+meeting-notes/
 ├── recorder-macos/            # macOS Swift 音频采集守护进程源码 (macOS 14.2+)
 │   ├── Package.swift          # Swift Package 清单 (.macOS("14.2"))
 │   ├── Sources/MeetingRecorder/
@@ -134,5 +134,5 @@ agy plugin validate ./plugin --strict
 
 ## 隐私与许可（Privacy & License）
 
-- **本地数据目录**：在 Antigravity 插件环境下，所有录音、时间线、逐字稿与会议纪要保存在 `${PLUGIN_DATA}`（如新安装 `~/.gemini/antigravity/plugin_data/meeting-notes/`；通过 `--dest ~/.gemini/config/plugins/anti-meeting` 原地升级的旧版保留在 `~/.gemini/antigravity/plugin_data/anti-meeting/`；独立启动默认 `~/Library/Application Support/MeetingNotes/`）。
+- **本地数据目录**：在 Antigravity 插件环境下，所有录音、时间线、逐字稿与会议纪要保存在 `${PLUGIN_DATA}`（默认 `~/.gemini/antigravity/plugin_data/meeting-notes/`；独立启动时默认 `~/Library/Application Support/MeetingNotes/`）。
 - **开源协议**：本项目基于 [MIT License](LICENSE) 开源。

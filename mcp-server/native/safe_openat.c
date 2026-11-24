@@ -18,7 +18,7 @@
 #define RENAME_EXCL 0x00000004
 #endif
 
-extern int32_t antigravity_swift_decode_uint64(const char *token, ptrdiff_t len, uint64_t *out_val);
+extern int32_t meeting_swift_decode_uint64(const char *token, ptrdiff_t len, uint64_t *out_val);
 
 static const char *errno_to_code(int err) {
   switch (err) {
@@ -264,7 +264,7 @@ static napi_value native_decode_swift_uint64(napi_env env, napi_callback_info in
   }
 
   uint64_t decoded_val = 0;
-  int32_t ok = antigravity_swift_decode_uint64(buf, (ptrdiff_t)byte_len, &decoded_val);
+  int32_t ok = meeting_swift_decode_uint64(buf, (ptrdiff_t)byte_len, &decoded_val);
   if (allocated) free(buf);
   if (ok != 1) {
     return null_val;

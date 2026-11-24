@@ -70,8 +70,6 @@ SIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
 if [[ -z "$SIGN_IDENTITY" ]]; then
   if security find-identity -v -p codesigning 2>/dev/null | grep -q '"Local Meeting Recorder"'; then
     SIGN_IDENTITY="Local Meeting Recorder"
-  elif security find-identity -v -p codesigning 2>/dev/null | grep -q '"Antigravity Meeting Local"'; then
-    SIGN_IDENTITY="Antigravity Meeting Local"
   fi
 fi
 
