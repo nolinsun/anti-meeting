@@ -842,12 +842,17 @@ function buildTranscribePrompt(meeting: MeetingSummary): string {
       meeting.transcribedChunkCount > 0 && meeting.missingChunkCount > 0
         ? `Currently ${meeting.transcribedChunkCount}/${meeting.chunkCount} chunks are transcribed; resume the remaining missing chunks before stitching notes.`
         : "";
+    const saveHint =
+      meeting.chunkCount === 1
+        ? `Inspect the audio solely via \`read_file\` (never invoke \`run_command\` on audio files), then save \`chunkTranscript\`, \`fullTranscript\`, and \`notes\` in one batched \`meeting_save_result({ meetingId: "${meeting.id}", kind: "bundle", ... })\` call.`
+        : `Inspect audio solely via \`read_file\` (never invoke \`run_command\` on audio files), checkpoint each missing chunk via \`meeting_save_result\`, then save the stitched transcript and structured notes together via \`meeting_save_result({ kind: "bundle" })\`.`;
     return [
-      `Use the meeting-notes skill to transcribe and summarize meeting \`${meeting.id}\` (${meeting.chunkCount} chunks).`,
+      `Use the meeting-notes skill to transcribe and summarize meeting \`${meeting.id}\` (${meeting.chunkCount} chunk${meeting.chunkCount === 1 ? "" : "s"}).`,
       modeNote,
       parallelHint,
       resumeHint,
-      `Call \`meeting_get({ meetingId: "${meeting.id}" })\` first to inspect chunk paths and resume state, transcribe readable chunks and persist each via \`meeting_save_result\`, then save the stitched transcript and structured notes.`,
+      `Call \`meeting_get({ meetingId: "${meeting.id}" })\` first to inspect chunk paths and resume state.`,
+      saveHint,
     ]
       .filter(Boolean)
       .join(" ");
@@ -865,12 +870,17 @@ function buildTranscribePrompt(meeting: MeetingSummary): string {
     meeting.transcribedChunkCount > 0 && meeting.missingChunkCount > 0
       ? `当前已完成 ${meeting.transcribedChunkCount}/${meeting.chunkCount} 个切片，请先补转剩余缺失切片后再汇总纪要。`
       : "";
+  const saveHint =
+    meeting.chunkCount === 1
+      ? `请仅使用 \`read_file\` 听取音频（禁止对音频文件调用 \`run_command\`），完成后用一次 \`meeting_save_result({ meetingId: "${meeting.id}", kind: "bundle", ... })\` 批量保存分片逐字稿、完整逐字稿与会议纪要。`
+      : `请仅使用 \`read_file\` 听取音频（禁止对音频文件调用 \`run_command\`），逐片按断点保存转写，最后用一次 \`meeting_save_result({ kind: "bundle", ... })\` 合并保存完整逐字稿与会议纪要。`;
   return [
     `请使用 meeting-notes 技能整理会议 \`${meeting.id}\`（共 ${meeting.chunkCount} 个切片）。`,
     modeNote,
     parallelHint,
     resumeHint,
-    `请先调用 \`meeting_get({ meetingId: "${meeting.id}" })\` 获取最新切片路径与断点进度，逐片读取可用音频转写并按片保存，最后保存完整逐字稿与会议纪要。`,
+    `请先调用 \`meeting_get({ meetingId: "${meeting.id}" })\` 获取最新切片路径与进度。`,
+    saveHint,
   ]
     .filter(Boolean)
     .join(" ");

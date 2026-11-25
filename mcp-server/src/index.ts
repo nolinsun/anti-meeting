@@ -164,6 +164,11 @@ async function main() {
       title: "Open Meeting Notes",
       description:
         "Open the Meeting Notes side pane or full-page view (live macOS recorder and meeting history). All arguments are optional.",
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
       inputSchema: {
         view: z.enum(["live", "history"]).optional(),
         meetingId: z.string().optional(),
@@ -213,6 +218,12 @@ async function main() {
       title: "Start Meeting Recording",
       description:
         "Start a local meeting recording session (macOS only): mode 'dual' (dual-track: global macOS system audio + microphone for Zoom, Feishu, Tencent Meeting, Google Meet, Teams, browsers, etc.) or 'mic' (mic-only).",
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
       inputSchema: {
         mode: z
           .enum(["mic", "dual"])
@@ -242,9 +253,15 @@ async function main() {
   server.registerTool(
     "meeting_stop",
     {
-      title: "停止会议录制",
+      title: "Stop Meeting Recording",
       description:
         "Stop the active meeting recording, flush and atomically finalize the final audio chunk, and return the manifest.",
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
       inputSchema: {
         meetingId: z.string().optional().describe("Optional meetingId guard so stop only stops the expected session"),
       },
@@ -280,8 +297,13 @@ async function main() {
   server.registerTool(
     "meeting_status",
     {
-      title: "查询录制状态",
+      title: "Get Recording Status",
       description: "Query live recorder state, elapsed duration, audio levels, and committed chunks.",
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
     async () => {
       try {
@@ -298,9 +320,14 @@ async function main() {
   server.registerTool(
     "meeting_get",
     {
-      title: "获取会议切片与转写进度",
+      title: "Get Meeting Chunks & Progress",
       description:
         "Get meeting manifest, absolute audio chunk paths (absoluteAudioPath plus dual-track absoluteMicPath, absoluteRemotePath, and speaker timeline absoluteTimelinePath) for read_file, completed/missing chunk IDs, pagination fields (totalChunks, hasMoreChunks, nextChunkOffset), and transcript/notes file paths.",
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
       inputSchema: {
         meetingId: z.string().describe("Target meeting ID"),
         chunkOffset: z.number().int().min(0).optional().describe("Zero-based pagination offset into chunks"),
@@ -335,8 +362,13 @@ async function main() {
   server.registerTool(
     "meeting_list",
     {
-      title: "列出历史会议",
+      title: "List Meetings",
       description: "List recorded meetings ordered newest-first with transcription and notes status.",
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
       inputSchema: {
         limit: z.number().int().min(1).max(200).optional(),
         offset: z.number().int().min(0).optional(),
@@ -355,8 +387,13 @@ async function main() {
   server.registerTool(
     "meeting_search",
     {
-      title: "搜索历史会议内容",
+      title: "Search Meetings",
       description: "Search across meeting titles, notes, and transcripts by keyword.",
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
       inputSchema: {
         query: z.string().min(1).describe("Search keyword"),
         limit: z.number().int().min(1).max(50).optional(),
@@ -375,33 +412,172 @@ async function main() {
   server.registerTool(
     "meeting_save_result",
     {
-      title: "保存会议转写与纪要",
+      title: "Save Transcript & Notes",
       description:
-        "Persist per-chunk transcript (kind='chunk_transcript' with chunkId), stitched full transcript (kind='full_transcript'), or meeting notes (kind='notes').",
+        "Persist per-chunk transcript (kind='chunk_transcript' with chunkId), stitched full transcript (kind='full_transcript'), meeting notes (kind='notes'), or multiple artifacts in one call (kind='bundle' with chunkTranscript/fullTranscript/notes).",
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
       inputSchema: {
         meetingId: z.string().describe("Target meeting ID"),
-        kind: z.enum(["chunk_transcript", "full_transcript", "notes"]),
-        chunkId: z.string().max(64).optional().describe("Required when kind='chunk_transcript', e.g. 'chunk_001'"),
-        content: z.string().describe("Markdown content to persist"),
+        kind: z.enum(["chunk_transcript", "full_transcript", "notes", "bundle"]),
+        chunkId: z
+          .string()
+          .max(64)
+          .optional()
+          .describe("Required when kind='chunk_transcript' or when kind='bundle' includes chunkTranscript, e.g. 'chunk_001'"),
+        content: z
+          .string()
+          .optional()
+          .describe("Markdown content for kind='chunk_transcript', 'full_transcript', or 'notes'"),
+        chunkTranscript: z
+          .string()
+          .optional()
+          .describe("Optional per-chunk transcript Markdown when kind='bundle' (requires chunkId)"),
+        fullTranscript: z
+          .string()
+          .optional()
+          .describe("Optional stitched full transcript Markdown when kind='bundle'"),
+        notes: z
+          .string()
+          .optional()
+          .describe("Optional structured meeting notes Markdown when kind='bundle'"),
         title: wellFormedTitleSchema.optional().describe("Optional updated meeting title"),
       },
     },
     async (args) => {
       try {
-        let prebuiltResult: ReturnType<typeof jsonResult> | null = null;
-        const saved = store.saveResult({
-          meetingId: args.meetingId,
-          kind: args.kind,
-          chunkId: args.chunkId,
-          content: args.content,
-          title: args.title,
-          manageLease: true,
-          beforeCommit: (preview) => {
-            prebuiltResult = jsonResult({ ...preview });
-          },
-        });
+        const runAfterNotesAutoCleanup = async (shouldCleanup: boolean) => {
+          let autoCleanup: { cleaned: boolean; freedBytes: number } = { cleaned: false, freedBytes: 0 };
+          if (shouldCleanup && store.getSettings().audioRetentionPolicy === "after_notes") {
+            try {
+              const probe = await daemon.probeStatus();
+              const activeBusyId =
+                probe.kind === "running" &&
+                ["starting", "recording", "finalizing"].includes(probe.snapshot.state)
+                  ? probe.snapshot.meetingId
+                  : null;
+              if (probe.kind !== "unknown" && activeBusyId !== args.meetingId) {
+                autoCleanup = store.tryAutoCleanupAfterNotes(args.meetingId);
+              }
+            } catch {
+              // Auto cleanup is best-effort and must never fail an already saved notes result.
+            }
+          }
+          return autoCleanup;
+        };
+
+        if (args.kind !== "bundle") {
+          if (typeof args.content !== "string") {
+            throw new Error(`kind='${args.kind}' requires 'content'`);
+          }
+          let prebuiltResult: ReturnType<typeof jsonResult> | null = null;
+          const saved = store.saveResult({
+            meetingId: args.meetingId,
+            kind: args.kind,
+            chunkId: args.chunkId,
+            content: args.content,
+            title: args.title,
+            manageLease: true,
+            beforeCommit: (preview) => {
+              prebuiltResult = jsonResult({ ...preview });
+            },
+          });
+          try {
+            if (args.kind === "notes") {
+              store.releaseNotesJob(args.meetingId);
+            } else {
+              store.touchNotesJob(args.meetingId);
+            }
+          } catch {
+            // Best-effort job tracking update must never fail an already saved result.
+          }
+          const autoCleanup = await runAfterNotesAutoCleanup(args.kind === "notes");
+          if (autoCleanup.cleaned) {
+            return jsonResult({
+              savedPath: saved.savedPath,
+              meetingId: saved.meetingId,
+              kind: saved.kind,
+              ...(saved.chunkId !== undefined ? { chunkId: saved.chunkId } : {}),
+              autoCleanedAudio: true,
+              autoCleanedBytes: autoCleanup.freedBytes,
+            });
+          }
+          return (
+            prebuiltResult ??
+            jsonResult({
+              savedPath: saved.savedPath,
+              meetingId: saved.meetingId,
+              kind: saved.kind,
+              ...(saved.chunkId !== undefined ? { chunkId: saved.chunkId } : {}),
+            })
+          );
+        }
+
+        const ops: Array<{
+          kind: "chunk_transcript" | "full_transcript" | "notes";
+          chunkId?: string;
+          content: string;
+        }> = [];
+        if (typeof args.chunkTranscript === "string") {
+          if (!args.chunkId || !args.chunkId.trim()) {
+            throw new Error("kind='bundle' with chunkTranscript requires chunkId");
+          }
+          ops.push({
+            kind: "chunk_transcript",
+            chunkId: args.chunkId,
+            content: args.chunkTranscript,
+          });
+        }
+        if (typeof args.fullTranscript === "string") {
+          ops.push({ kind: "full_transcript", content: args.fullTranscript });
+        }
+        if (typeof args.notes === "string") {
+          ops.push({ kind: "notes", content: args.notes });
+        }
+        if (ops.length === 0) {
+          throw new Error(
+            "kind='bundle' requires at least one of chunkTranscript, fullTranscript, or notes",
+          );
+        }
+
+        const savedPaths: {
+          chunkTranscriptPath?: string;
+          transcriptPath?: string;
+          notesPath?: string;
+        } = {};
+        let lastSavedPath = "";
+        let savedChunkId: string | undefined;
+        let savedNotes = false;
+
+        for (let i = 0; i < ops.length; i += 1) {
+          const op = ops[i];
+          const isLast = i === ops.length - 1;
+          const saved = store.saveResult({
+            meetingId: args.meetingId,
+            kind: op.kind,
+            chunkId: op.chunkId,
+            content: op.content,
+            title: isLast ? args.title : undefined,
+            manageLease: true,
+          });
+          lastSavedPath = saved.savedPath;
+          if (op.kind === "chunk_transcript") {
+            savedPaths.chunkTranscriptPath = saved.savedPath;
+            savedChunkId = saved.chunkId;
+          } else if (op.kind === "full_transcript") {
+            savedPaths.transcriptPath = saved.savedPath;
+          } else {
+            savedPaths.notesPath = saved.savedPath;
+            savedNotes = true;
+          }
+        }
+
         try {
-          if (args.kind === "notes") {
+          if (savedNotes) {
             store.releaseNotesJob(args.meetingId);
           } else {
             store.touchNotesJob(args.meetingId);
@@ -409,43 +585,18 @@ async function main() {
         } catch {
           // Best-effort job tracking update must never fail an already saved result.
         }
-        let autoCleanup: { cleaned: boolean; freedBytes: number } = { cleaned: false, freedBytes: 0 };
-        if (args.kind === "notes" && store.getSettings().audioRetentionPolicy === "after_notes") {
-          try {
-            const probe = await daemon.probeStatus();
-            const activeBusyId =
-              probe.kind === "running" &&
-              ["starting", "recording", "finalizing"].includes(probe.snapshot.state)
-                ? probe.snapshot.meetingId
-                : null;
-            if (probe.kind !== "unknown" && activeBusyId !== args.meetingId) {
-              autoCleanup = store.tryAutoCleanupAfterNotes(args.meetingId);
-            }
-          } catch {
-            // Auto cleanup is best-effort and must never fail an already saved notes result.
-          }
-        }
 
-        if (autoCleanup.cleaned) {
-          return jsonResult({
-            savedPath: saved.savedPath,
-            meetingId: saved.meetingId,
-            kind: saved.kind,
-            ...(saved.chunkId !== undefined ? { chunkId: saved.chunkId } : {}),
-            autoCleanedAudio: true,
-            autoCleanedBytes: autoCleanup.freedBytes,
-          });
-        }
-
-        return (
-          prebuiltResult ??
-          jsonResult({
-            savedPath: saved.savedPath,
-            meetingId: saved.meetingId,
-            kind: saved.kind,
-            ...(saved.chunkId !== undefined ? { chunkId: saved.chunkId } : {}),
-          })
-        );
+        const autoCleanup = await runAfterNotesAutoCleanup(savedNotes);
+        return jsonResult({
+          meetingId: args.meetingId,
+          kind: "bundle",
+          savedPath: lastSavedPath,
+          savedPaths,
+          ...(savedChunkId !== undefined ? { chunkId: savedChunkId } : {}),
+          ...(autoCleanup.cleaned
+            ? { autoCleanedAudio: true, autoCleanedBytes: autoCleanup.freedBytes }
+            : {}),
+        });
       } catch (err) {
         return errorResult(err);
       }

@@ -25,7 +25,10 @@ Follow this sequential, resumable workflow whenever asked to transcribe or summa
 Process **only** chunks listed in `missingChunkIds` in ascending `index` order (skip chunks already in `transcribedChunkIds` unless the user explicitly requested a full re-transcription).
 
 ### 2A. Routing Strategy
-- **Short meeting / resume (`missingChunkIds.length <= 4`)**: The coordinator Agent processes each missing chunk sequentially with `read_file` and persists each chunk immediately via `meeting_save_result`.
+- **Single-chunk fast path (`totalChunks === 1 && missingChunkIds.length === 1`)**: Read the single chunk (plus `absoluteTimelinePath` / tracks if needed per Section 2B) via `read_file`, then persist the chunk transcript, full transcript, and structured notes (+ optional `title`) in **one single batched call**:
+  `meeting_save_result({ meetingId, kind: "bundle", chunkId: chunk.id, chunkTranscript, fullTranscript, notes, title })`.
+  Do **not** issue separate sequential `meeting_save_result` calls for `chunk_transcript`, `full_transcript`, and `notes` on single-chunk meetings.
+- **Short multi-chunk meeting / resume (`totalChunks > 1 && missingChunkIds.length <= 4`)**: The coordinator Agent processes each missing chunk sequentially with `read_file` and persists each chunk immediately via `meeting_save_result({ meetingId, kind: "chunk_transcript", chunkId: chunk.id, content })` for resume safety, then saves the final transcript and notes together using `kind: "bundle"`.
 - **Long meeting (`missingChunkIds.length > 4`)**:
   1. First finish paginating `meeting_get` (`chunkOffset: nextChunkOffset` until `hasMoreChunks === false`) so you have the full list of missing chunks, their paths, time ranges, and dual-track (`dual`) timeline/track existence flags.
   2. Partition readable missing chunks in ascending `index` order into groups of **2–3 consecutive chunks** each.
@@ -39,7 +42,8 @@ Process **only** chunks listed in `missingChunkIds` in ascending `index` order (
 ### 2B. Per-Chunk Audio & Timeline Rules
 
 For each chunk:
-1. Check readable audio:
+1. **Never call `run_command` on audio files**: Always inspect audio solely via `read_file`. Do **not** invoke `ffmpeg`, `sox`, Python scripts, or any shell commands to inspect, transcode, measure volume, or gain-boost quiet or silent recordings. If reading a chunk via `read_file` reveals silence, very low ambient noise, or no intelligible speech, report that faithfully directly without running terminal commands.
+2. Check readable audio:
    - If `chunk.fileExists === true`: read `chunk.absoluteAudioPath` via `read_file` (applies to both `mic` and `dual`).
    - Else (`chunk.fileExists === false`):
      - If `manifest.mode === "dual"` and (`chunk.micFileExists === true` or `chunk.remoteFileExists === true`): read only the surviving track(s) (`absoluteMicPath` / `absoluteRemotePath`) via `read_file` and explicitly note which track was missing.
@@ -56,19 +60,19 @@ For each chunk:
    - Exact **numbers, budgets, dates, percentages, and latency metrics**
    - **Negations** (`不是...而是...`, `不要...`, `不能...`)
    - **Action-item owners and deadlines**
-5. Immediately persist the chunk transcript via:
+5. **For multi-chunk meetings (`totalChunks > 1`)**, immediately persist each finished chunk transcript via:
    `meeting_save_result({ meetingId, kind: "chunk_transcript", chunkId: chunk.id, content })`
-   Persisting after each chunk guarantees completed chunks are never lost if interrupted or quota-limited.
+   so completed chunks are never lost if interrupted or quota-limited. (**For single-chunk meetings**, defer saving until Section 4 and save all three artifacts in a single `kind: "bundle"` call.)
 
 ## 3. Workspace Context Correction & Stitching
+
+(Skip Sections 3.1–3.2 for single-chunk meetings that have not written partial transcripts yet; go directly to stitching & notes and save once via `kind: "bundle"`.)
 
 1. Re-fetch `meeting_get({ meetingId })` (and paginate with `chunkOffset: nextChunkOffset` if `hasMoreChunks === true`) before finalizing to ensure `manifest` state, full `partialTranscriptPaths`, and chunk list are current.
 2. Read any previously completed chunk transcripts in `partialTranscriptPaths` via `read_file`.
 3. When parallel subagent batches were used, **normalize speaker names/labels across all chunk groups** (e.g., unify inconsistent `参会者 A/B` labels referring to the same person) and verify no duplicated sentences remain across chunk boundaries.
 4. If an active workspace is open, check key files/docs/symbol names when ambiguous homophones appear (e.g., project names, API endpoints, module names, team member names) and normalize technical terminology consistently across all chunks.
 5. Merge all available chunk transcripts in order into a clean, deduplicated Markdown transcript with `[MM:SS]` timestamps (and `我方` / `对方` labels for dual-track meetings), clearly inserting `[缺口说明：...]` markers where any `gaps` (`mic_*`, `system_audio_*`, `device_switched`, etc.) or missing/failed chunks occurred. Never fabricate dialogue during an uncaptured gap.
-6. Persist the stitched transcript via:
-   `meeting_save_result({ meetingId, kind: "full_transcript", content })`
 
 ## 4. Generate & Persist Structured Notes
 
@@ -79,10 +83,13 @@ Produce concise, accurate Markdown meeting notes containing:
 - **行动项（Action Items）**（表格或列表：`事项 | 负责人 | 截止时间`）
 - **风险、分歧与待确认项**
 
-Save the notes via:
-`meeting_save_result({ meetingId, kind: "notes", content, title })`
+Persist the final outputs in **one batched call**:
+- **Single-chunk meeting (`totalChunks === 1`)**:
+  `meeting_save_result({ meetingId, kind: "bundle", chunkId: chunk.id, chunkTranscript, fullTranscript, notes, title })`
+- **Multi-chunk meeting (`totalChunks > 1`)**:
+  `meeting_save_result({ meetingId, kind: "bundle", fullTranscript, notes, title })`
 (Pass an improved concise `title` if the current title is still an auto-generated `语音记录 MM-DD HH:mm` or `双轨会议 MM-DD HH:mm`.)
 
 ## 5. Present Result to User
 
-Reply concisely with the structured meeting notes and clickable `file://` links to the saved `notesPath` and `transcriptPath`.
+Reply concisely with the structured meeting notes and clickable `file://` links to the saved `notesPath` and `transcriptPath` (from `savedPaths`).
