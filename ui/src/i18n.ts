@@ -144,6 +144,11 @@ export interface UiStrings {
   copyAgain: string;
   generateInCurrentChat: string;
   copiedPromptToast: string;
+  globalViewBannerTitle: string;
+  globalViewBannerDesc: string;
+  btnCopyPrompt: string;
+  copiedPromptGlobalView: string;
+  copiedPromptDirectToast: string;
   liveGapTitle: string;
   liveGapSummaryGaps: (count: number, start: string, end: string, reason: string) => string;
   liveGapSummaryFailed: (count: number) => string;
@@ -354,6 +359,13 @@ const EN: UiStrings = {
   copyAgain: "Copy Again",
   generateInCurrentChat: "Generate in Current Chat",
   copiedPromptToast: "Cannot start new session directly; prompt copied",
+  globalViewBannerTitle: "Global View (Copy-Only for Notes)",
+  globalViewBannerDesc:
+    "This left-sidebar view is not attached to a conversation, so one-click session launch is unavailable. To generate notes directly, open Meeting Notes from a conversation's right side pane (\"+\" → Meeting Notes), or click \"Copy Prompt\" and paste into any chat.",
+  btnCopyPrompt: "Copy Prompt",
+  copiedPromptGlobalView:
+    "Prompt copied to clipboard. Paste it into any chat to generate notes, or open Meeting Notes from a conversation's right side pane (\"+\" → Meeting Notes) for one-click generation.",
+  copiedPromptDirectToast: "Prompt copied—paste into any chat",
   liveGapTitle: "Audio gap detected during recording",
   liveGapSummaryGaps: (count, start, end, reason) =>
     `${count} audio gap${count === 1 ? "" : "s"} recorded (latest: ${start}–${end}, ${reason})`,
@@ -583,6 +595,13 @@ const ZH: UiStrings = {
   copyAgain: "再次复制",
   generateInCurrentChat: "改在当前对话生成",
   copiedPromptToast: "暂无法直连新会话，已自动复制生成指令",
+  globalViewBannerTitle: "全局视图（仅支持复制指令）",
+  globalViewBannerDesc:
+    "当前从左侧边栏打开的全局视图未绑定对话，无法直接拉起生成会话。如需一键生成纪要，请从任意对话右侧边栏「+ → Meeting Notes」打开；也可点击「复制生成指令」粘贴到任意对话。",
+  btnCopyPrompt: "复制生成指令",
+  copiedPromptGlobalView:
+    "已复制生成指令，粘贴到任意对话即可生成纪要；如需一键生成，请从对话右侧边栏「+ → Meeting Notes」打开。",
+  copiedPromptDirectToast: "已复制生成指令，请粘贴到任意对话",
   liveGapTitle: "录制过程中发生音频缺口",
   liveGapSummaryGaps: (count, start, end, reason) =>
     `已记录 ${count} 处音频缺口（最近：${start}–${end}，${reason}）`,

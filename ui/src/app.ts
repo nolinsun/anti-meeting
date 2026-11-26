@@ -142,6 +142,8 @@ interface AppState {
   audioRetentionPolicy: "manual" | "after_notes" | "days_7";
   hasMessageCap: boolean;
   hasOpenLinksCap: boolean;
+  hostConnected: boolean;
+  dismissedGlobalBanner: boolean;
   daemonRunning: boolean;
   daemonError: string | null;
   snapshot: RecorderSnapshot | null;
@@ -179,6 +181,8 @@ const state: AppState = {
   audioRetentionPolicy: "manual",
   hasMessageCap: false,
   hasOpenLinksCap: false,
+  hostConnected: false,
+  dismissedGlobalBanner: false,
   daemonRunning: false,
   daemonError: null,
   snapshot: null,
@@ -904,11 +908,22 @@ async function handleSendToAgent(
 ) {
   if (state.actionBusy || isMeetingGenerating(meeting.id)) return;
   const target = options?.target ?? "new";
+  const t = getStrings(state.lang);
+  const prompt = buildTranscribePrompt(meeting);
+  if (state.hostConnected && !state.hasMessageCap) {
+    await copyMarkdownText(prompt, true);
+    state.copiedPromptBox = {
+      meetingId: meeting.id,
+      prompt,
+      allowCurrentChatFallback: false,
+      reason: t.copiedPromptGlobalView,
+    };
+    showToast(t.copiedPromptDirectToast);
+    return;
+  }
   state.actionBusy = true;
   state.bannerError = null;
   render();
-  const t = getStrings(state.lang);
-  const prompt = buildTranscribePrompt(meeting);
   const claimToken =
     typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
       ? crypto.randomUUID()
@@ -1309,6 +1324,9 @@ function transcribeButtonLabel(m: MeetingSummary): string {
   if (isMeetingGenerating(m.id)) {
     return t.generatingInSession;
   }
+  if (state.hostConnected && !state.hasMessageCap) {
+    return t.btnCopyPrompt;
+  }
   if (m.transcribedChunkCount > 0 && m.missingChunkCount > 0) {
     return t.btnResumeMissing(m.transcribedChunkCount, m.chunkCount);
   }
@@ -1535,7 +1553,13 @@ function renderLiveTab(): string {
         </div>
         <div class="item-actions">
           <button type="button" class="btn btn-primary btn-sm" data-action="transcribe" data-id="${escapeHtml(justStoppedMeeting.id)}" ${state.actionBusy || isMeetingGenerating(justStoppedMeeting.id) ? "disabled" : ""}>
-            ${svgIcon("notes")}${escapeHtml(isMeetingGenerating(justStoppedMeeting.id) ? t.generatingInSession : t.generateNotesNewSession)}
+            ${svgIcon("notes")}${escapeHtml(
+              isMeetingGenerating(justStoppedMeeting.id)
+                ? t.generatingInSession
+                : state.hostConnected && !state.hasMessageCap
+                  ? t.btnCopyPrompt
+                  : t.generateNotesNewSession,
+            )}
           </button>
           <button type="button" class="btn btn-sm" data-action="open-detail" data-id="${escapeHtml(justStoppedMeeting.id)}">${escapeHtml(t.viewDetails)}</button>
           <button type="button" class="btn btn-sm btn-ghost" data-action="dismiss-cta">${escapeHtml(t.dismiss)}</button>
@@ -2027,6 +2051,17 @@ function render() {
       </header>
       <main class="content-area">
         ${
+          state.hostConnected && !state.hasMessageCap && !state.dismissedGlobalBanner
+            ? `<div class="banner info" data-global-view-banner="true">
+                 <div style="flex:1;min-width:0;">
+                   <strong>${escapeHtml(t.globalViewBannerTitle)}</strong>
+                   <div class="muted-note">${escapeHtml(t.globalViewBannerDesc)}</div>
+                 </div>
+                 <button type="button" class="btn btn-sm btn-ghost" data-action="dismiss-global-banner">${escapeHtml(t.dismiss)}</button>
+               </div>`
+            : ""
+        }
+        ${
           state.bannerError
             ? `<div class="banner error"><span>${escapeHtml(state.bannerError)}</span><button type="button" class="btn btn-sm" data-action="dismiss-error">${escapeHtml(t.close)}</button></div>`
             : ""
@@ -2148,6 +2183,10 @@ document.addEventListener("click", (event) => {
       break;
     case "dismiss-error":
       state.bannerError = null;
+      render();
+      break;
+    case "dismiss-global-banner":
+      state.dismissedGlobalBanner = true;
       render();
       break;
     case "dismiss-cta":
@@ -2353,6 +2392,7 @@ async function boot() {
     const caps = app.getHostCapabilities() as Record<string, unknown> | undefined;
     state.hasMessageCap = Boolean(caps?.message);
     state.hasOpenLinksCap = Boolean(caps?.openLinks);
+    state.hostConnected = true;
     applyHostContext(app.getHostContext());
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
